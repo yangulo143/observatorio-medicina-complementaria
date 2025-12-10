@@ -1,0 +1,10 @@
+data/
+*.rds
+*.xlsx
+*.csv
+.Rproj.user
+.Rhistory
+.quarto/
+*.pdf
+.shapefiles peru/
+.2002-2022/

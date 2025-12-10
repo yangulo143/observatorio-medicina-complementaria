@@ -1,0 +1,592 @@
+---
+title: "Indicadores individuales: Medicina Complementaria (2019-2024)"
+subtitle: "Análisis de datos del Ministerio de Salud (MINSA)"
+date: last-modified
+author: "Subdirección de Medicina Complementaria (SUMEC-CENSI)"
+format: 
+  html:
+    theme: cosmo
+    toc: true
+    page-layout: full
+    code-fold: true
+footer: "Fuente de datos: Sistema HISS-MINSA | Fecha de corte: 05/2025"
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(plotly)
+library(DT)
+df_ind <- readRDS("data/df_individuales_geo.rds")
+
+# --- RECODIFICACIÓN DE ETNIA Y FINANCIADOR ---
+
+# 1. Definir lista de códigos de Amazonía (según tu especificación)
+# Aseguramos que sean caracteres para evitar errores de tipo
+codigos_amazonia <- as.character(c(
+  1, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 18, 
+  20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 
+  35, 36, 37, 38, 41, 42, 43, 44, 45, 46, 47, 48, 
+  51, 52, 53, 54, 55
+))
+
+# 2. Procesar la data para los gráficos
+df_sociodemo <- df_ind %>%
+  mutate(
+    # --- A. RECODIFICACIÓN DE ETNIA ---
+    # Convertimos a caracter por seguridad
+    Et_str = as.character(Et),
+    
+    Grupo_Etnico = case_when(
+      Et_str == "58" ~ "Mestizo",
+      Et_str == "40" ~ "Quechua",
+      Et_str == "57" ~ "Blanco",
+      Et_str == "56" ~ "Afrodescendiente",
+      Et_str == "2"  ~ "Aimara",
+      Et_str == "60" ~ "Otro",
+      Et_str %in% codigos_amazonia ~ "Nativo Amazonía",
+      is.na(Et_str) ~ "NO REGISTRADO",
+      TRUE ~ "Perteneciente a otro pueblo" # Captura el resto de códigos
+    ),
+    
+    # --- B. RECODIFICACIÓN DE FINANCIADOR (Nombres Legibles) ---
+    # Basado en el estándar HIS MINSA
+    Nombre_Financiador = case_when(
+      as.character(Fi) == "1"  ~ "Usuario (Pago)",
+      as.character(Fi) == "2"  ~ "SIS",
+      as.character(Fi) == "3"  ~ "ESSALUD",
+      as.character(Fi) == "4"  ~ "SOAT",
+      as.character(Fi) == "5"  ~ "Sanidad FAP",
+      as.character(Fi) == "6"  ~ "Sanidad Naval",
+      as.character(Fi) == "7"  ~ "Sanidad EP",
+      as.character(Fi) == "8"  ~ "Sanidad PNP",
+      as.character(Fi) == "9"  ~ "Privados",
+      as.character(Fi) == "10" ~ "Otros",
+      as.character(Fi) == "11" ~ "Exonerado",
+      TRUE ~ "Desconocido"
+    )
+  )
+
+# 3. Ordenar los factores para que el gráfico salga ordenado por frecuencia
+# Esto ayuda a que "Mestizo" (que suele ser el mayor) salga primero o último según prefieras.
+
+# --- FUNCIÓN AUXILIAR PARA TABLAS DE DESCARGA ---
+# Esta función crea estandariza el botón de Excel para todos los gráficos
+make_download_table <- function(data_input, filename_label = "datos") {
+  datatable(
+    data_input,
+    extensions = 'Buttons',
+    rownames = FALSE,
+    options = list(
+      dom = 'Bfrtip',
+      buttons = list(
+        list(extend = 'excel', filename = filename_label, title = filename_label),
+        list(extend = 'csv', filename = filename_label)
+      ),
+      pageLength = 5, # Pocas filas para no ocupar mucho espacio
+      scrollX = TRUE,
+      language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json')
+    )
+  )
+}
+
+
+```
+
+::: callout-note
+**Instrucciones:** Todos los gráficos a continuación incluyen una pestaña llamada **"Datos Fuente"**. Haga clic en ella para ver la tabla y descargar la información en Excel.
+:::
+
+## 1. Perfil del Usuario
+
+### Pirámide Poblacional y Ciclo de Vida
+
+::: panel-tabset
+## Gráfico
+
+Distribución por edad y género de los usuarios atendidos en Medicina Complementaria.
+
+[^1]
+
+```{r}
+# 1. Definimos el orden lógico deseado
+orden_ciclo <- c("Niño", "Adolescente", "Adulto", "Adulto Mayor")
+
+# 2. Definimos los colores específicos (Mapeo Seguro)
+# F = Fucsia/DeepPink (#FF1493), M = Azul Marino (#000080)
+colores_sexo <- c("F" = "#FF1493", "M" = "#000080")
+
+# 3. Preparamos los datos
+perfil_sexo_edad <- df_ind %>%
+  filter(!is.na(ciclo_vida)) %>% 
+  mutate(
+    # Forzamos el orden en el gráfico
+    ciclo_vida = factor(ciclo_vida, levels = orden_ciclo) 
+  ) %>%
+  group_by(sexo, ciclo_vida) %>%
+  summarise(Atendidos = n_distinct(ID_paciente), .groups = 'drop')
+
+# 4. Generamos el gráfico con colores personalizados
+plot_ly(perfil_sexo_edad, 
+        x = ~ciclo_vida, 
+        y = ~Atendidos, 
+        color = ~sexo, 
+        colors = colores_sexo, # <--- AQUÍ SE APLICA EL COLOR
+        type = 'bar') %>%
+  layout(
+    title = "Atendidos Únicos por Etapa de Vida y Sexo", 
+    barmode = 'group',
+    xaxis = list(title = "Ciclo de Vida"), 
+    yaxis = list(title = "Número de Pacientes"),
+    legend = list(title = list(text = "Sexo"))
+  )
+```
+
+## Datos Fuente
+
+```{r}
+make_download_table(perfil_sexo_edad, "perfil_sexo_edad")
+```
+:::
+
+## 2. Distribución por Etnia y por financiador
+### Por Grupo Étnico
+::: {.panel-tabset}
+## Gráfico
+
+```{r}
+#| label: plot-etnia
+#| warning: false
+
+# 1. Agrupar por Pacientes Únicos
+resumen_etnia <- df_sociodemo %>%
+  group_by(Grupo_Etnico) %>%
+  summarise(Atendidos = n_distinct(ID_paciente)) %>%
+  arrange(desc(Atendidos)) # Ordenar de mayor a menor
+
+# 2. Gráfico
+plot_ly(resumen_etnia, 
+        x = ~Atendidos, 
+        y = ~reorder(Grupo_Etnico, Atendidos), # Reorder para que salga ordenado visualmente
+        type = 'bar', 
+        marker = list(color = '#2c3e50')) %>% # Un color sobrio (azul oscuro grisáceo)
+  layout(
+    title = "Pacientes Únicos según Autoidentificación Étnica",
+    xaxis = list(title = "Número de Pacientes"),
+    yaxis = list(title = ""),
+    margin = list(l = 150) # Margen izquierdo extra para leer las etiquetas largas
+  )
+
+```
+
+## Datos Fuente
+
+```{r}
+make_download_table(resumen_etnia, "resumen_etnia")
+```
+:::
+
+### Por financiamiento
+::: {.panel-tabset}
+## Gráfico
+```{r}
+#| label: plot-financiador
+#| warning: false
+
+# 1. Agrupar
+resumen_financiador <- df_sociodemo %>%
+  group_by(Nombre_Financiador) %>%
+  summarise(Atendidos = n_distinct(ID_paciente)) %>%
+  arrange(desc(Atendidos))
+
+# 2. Gráfico
+plot_ly(resumen_financiador, 
+        x = ~Atendidos, 
+        y = ~reorder(Nombre_Financiador, Atendidos), 
+        type = 'bar',
+        marker = list(color = '#27ae60')) %>% # Verde (asociado a financiamiento)
+  layout(
+    title = "Pacientes Únicos según Fuente de Financiamiento (IAFAS)",
+    xaxis = list(title = "Número de Pacientes"),
+    yaxis = list(title = "")
+  )
+```
+## Datos Fuente
+```{r}
+make_download_table(resumen_financiador, "resumen_financiador")
+```
+:::
+
+### Financiamiento y étnia
+
+::: {.panel-tabset}
+## Gráfico
+```{r}
+#| label: plot-etnia-financiador
+#| warning: false
+
+# 1. Agrupación Doble (Etnia + Financiador)
+resumen_combinado <- df_sociodemo %>%
+  group_by(Grupo_Etnico, Nombre_Financiador) %>%
+  summarise(Atendidos = n_distinct(ID_paciente), .groups = 'drop')
+
+# 2. Gráfico de Barras Apiladas (Stacked)
+plot_ly(resumen_combinado, 
+        x = ~Atendidos, 
+        y = ~Grupo_Etnico, 
+        color = ~Nombre_Financiador, 
+        type = 'bar') %>%
+  layout(
+    title = "Distribución de Financiador por Grupo Étnico",
+    barmode = 'stack', # Apilado para ver la composición
+    xaxis = list(title = "Número de Pacientes"),
+    yaxis = list(title = "", categoryorder = "total ascending"), # Ordena las barras por el total
+    legend = list(title = list(text = "Financiador"))
+  )
+```
+
+## Datos Fuente
+```{r}
+make_download_table(resumen_combinado, "resumen_combinado_etnia_financiador")
+```
+:::
+
+## 3. Morbilidad y Procedimientos
+### Procedimientos más frecuentes
+::: {.panel-tabset}
+## Gráfico
+```{r}
+
+#| label: plot-procedimientos-categoria
+#| warning: false
+
+# 1. PROCESAMIENTO: Categorización de Códigos
+df_procedimientos <- df_ind %>%
+  mutate(
+    # Aseguramos que codigo sea texto para evitar errores de comparación
+    codigo_str = as.character(codigo),
+    
+    Categoria_Procedimiento = case_when(
+      codigo_str %in% c("97810", "97811") ~ "Acupuntura",
+      codigo_str %in% c("97813", "97814") ~ "Electroacupuntura",
+      codigo_str %in% c("U903") ~ "Terapia Mente-cuerpo",
+      codigo_str %in% c("90861") ~ "Terapia de relajación",
+      codigo_str %in% c("90880") ~ "Sesión de hipnoterapia",
+      codigo_str %in% c("90849") ~ "Psicoterapia grupal (múltiples familias)",
+      codigo_str %in% c("90857") ~ "Psicoterapia interactiva de grupo",
+      codigo_str %in% c("U900") ~ "Terapia Neural",
+      codigo_str %in% c("U902") ~ "Reflexología",
+      codigo_str %in% c("U904") ~ "Homeopatía",
+      codigo_str %in% c("U907") ~ "Terapia Floral",
+      codigo_str %in% c("U908") ~ "Bioenergética",
+      codigo_str %in% c("U906") ~ "Trofoterapia",
+      codigo_str %in% c("U905") ~ "Fitoterapia",
+      codigo_str %in% c("97022") ~ "Hidroterapia",
+      codigo_str %in% c("98925", "98926", "98927", "98928", "98929") ~ "Osteopatía",
+      codigo_str %in% c("98940", "98941", "98942", "98943") ~ "Quiropraxia",
+      codigo_str %in% c("97124") ~ "Masoterapia",
+      codigo_str %in% c("Z5102", "U901") ~ "Laserterapia",
+      codigo_str %in% c("U080") ~ "Consejería en Med. Complem.",
+      TRUE ~ NA_character_ # Todo lo que no esté en la lista será NA
+    )
+  ) %>%
+  # Filtramos solo los que coincidieron con tu lista (Excluyendo NAs)
+  filter(!is.na(Categoria_Procedimiento))
+
+# 2. AGREGACIÓN: Conteo de PERSONAS ÚNICAS (Atendidos)
+resumen_procedimientos <- df_procedimientos %>%
+  group_by(Categoria_Procedimiento) %>%
+  summarise(Atendidos = n_distinct(ID_paciente)) %>%
+  arrange(desc(Atendidos)) # Ordenar de mayor a menor
+
+# 3. VISUALIZACIÓN
+plot_ly(resumen_procedimientos, 
+        x = ~Atendidos, 
+        y = ~reorder(Categoria_Procedimiento, Atendidos), # Ordena las barras
+        type = 'bar', 
+        orientation = 'h', # Gráfico Horizontal (Mejor para nombres largos)
+        marker = list(color = '#8e44ad')) %>% # Color Violeta/Morado distintivo
+  layout(
+    title = "Personas Atendidas por Tipo de Procedimiento",
+    xaxis = list(title = "Número de Personas Únicas"),
+    yaxis = list(title = ""),
+    margin = list(l = 150) # Margen izquierdo extra para que se lean los nombres
+  )
+```
+## Datos Fuente
+```{r}
+make_download_table(resumen_procedimientos, "resumen_procedimientos_categoria")
+```
+:::
+
+### Evolución de la Cartera de Servicios
+
+::: {.panel-tabset}
+
+## Grafico
+
+Este gráfico muestra el "peso" porcentual de cada terapia por año.
+
+```{r}
+#| label: plot-evolucion-stack
+#| warning: false
+
+# 1. PREPARACIÓN DE DATOS
+# Reutilizamos la lógica de categorías, pero agrupamos por AÑO también
+df_evolucion <- df_ind %>%
+  mutate(
+    codigo_str = as.character(codigo),
+    Categoria_Procedimiento = case_when(
+      codigo_str %in% c("97810", "97811") ~ "Acupuntura",
+      codigo_str %in% c("97813", "97814") ~ "Electroacupuntura",
+      codigo_str %in% c("U903") ~ "Terapia Mente-cuerpo",
+      codigo_str %in% c("90861") ~ "Terapia de relajación",
+      codigo_str %in% c("90880") ~ "Hipnoterapia",
+      codigo_str %in% c("90849") ~ "Psicoterapia grupal",
+      codigo_str %in% c("90857") ~ "Psicoterapia interactiva",
+      codigo_str %in% c("U900") ~ "Terapia Neural",
+      codigo_str %in% c("U902") ~ "Reflexología",
+      codigo_str %in% c("U904") ~ "Homeopatía",
+      codigo_str %in% c("U907") ~ "Terapia Floral",
+      codigo_str %in% c("U908") ~ "Bioenergética",
+      codigo_str %in% c("U906") ~ "Trofoterapia",
+      codigo_str %in% c("U905") ~ "Fitoterapia",
+      codigo_str %in% c("97022") ~ "Hidroterapia",
+      codigo_str %in% c("98925", "98926", "98927", "98928", "98929") ~ "Osteopatía",
+      codigo_str %in% c("98940", "98941", "98942", "98943") ~ "Quiropraxia",
+      codigo_str %in% c("97124") ~ "Masoterapia",
+      codigo_str %in% c("Z5102", "U901") ~ "Laserterapia",
+      codigo_str %in% c("U080") ~ "Consejería Med. Comp.",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(Categoria_Procedimiento)) %>%
+  # Agrupamos por Año y Categoría
+  group_by(ano, Categoria_Procedimiento) %>%
+  summarise(Atendidos = n_distinct(ID_paciente), .groups = 'drop_last') %>%
+  # Calculamos el porcentaje dentro de cada año
+  mutate(Porcentaje = Atendidos / sum(Atendidos))
+
+### Mapa de Calor (Porcentaje de Participación)
+
+# Aseguramos que los datos estén listos (si ya corriste el bloque anterior, esto ya existe)
+# Pero por seguridad, definimos el texto del tooltip aquí
+df_heatmap <- df_evolucion %>%
+  mutate(
+    Texto_Tooltip = paste0(
+      "<b>Año:</b> ", ano,
+      "<br><b>Terapia:</b> ", Categoria_Procedimiento,
+      "<br><b>Participación:</b> ", scales::percent(Porcentaje, accuracy = 0.1),
+      "<br><b>Pacientes:</b> ", format(Atendidos, big.mark=",")
+    )
+  )
+
+plot_ly(df_heatmap, 
+        x = ~ano, 
+        y = ~Categoria_Procedimiento, 
+        z = ~Porcentaje * 100, # Multiplicamos por 100 para que la escala de color sea 0-100
+        text = ~Texto_Tooltip,
+        hoverinfo = "text",
+        type = 'heatmap', 
+        colors = "Blues", # Escala de azules (más oscuro = mayor porcentaje)
+        colorbar = list(title = "Participación (%)", ticksuffix = "%")) %>%
+  layout(
+    title = "Mapa de Calor: % de Participación por Terapia",
+    xaxis = list(title = "", type = 'category'), 
+    yaxis = list(title = ""),
+    margin = list(l = 150) # Margen para leer los nombres largos
+  )
+```
+## Datos Fuente
+```{r}
+make_download_table(df_evolucion, "evolucion_participacion_terapia")
+```
+:::
+
+### Morbilidad según Diagnóstico Principal
+
+::: {.panel-tabset}
+## Gráfico
+```{r}
+#| label: plot-top20-cie10-filtrado
+#| warning: false
+
+# 1. DEFINIR LOS CÓDIGOS DE PROCEDIMIENTOS (Tu lista de exclusión/interés)
+codigos_interes <- c(
+  "97810", "97811", "97813", "97814", "U903", "90861", "90880", "90849", "90857", 
+  "U900", "U902", "U904", "U907", "U908", "U906", "U905", "97022", 
+  "98925", "98926", "98927", "98928", "98929", "98940", "98941", "98942", "98943", 
+  "97124", "Z5102", "U901", "U080"
+)
+
+# 2. CREAR UN "DICCIONARIO DE CITAS"
+# Identificamos qué id_cita tuvo qué procedimiento.
+# Esto es mucho más rápido que procesar toda la base.
+
+diccionario_citas_procedimientos <- df_ind %>%
+  # Nos quedamos solo con las filas que tienen los procedimientos de interés
+  filter(codigo %in% codigos_interes) %>%
+  mutate(
+    codigo_str = as.character(codigo),
+    # Aplicamos tu categorización
+    Categoria_Procedimiento = case_when(
+      codigo_str %in% c("97810", "97811") ~ "Acupuntura",
+      codigo_str %in% c("97813", "97814") ~ "Electroacupuntura",
+      codigo_str %in% c("U903") ~ "Terapia Mente-cuerpo",
+      codigo_str %in% c("90861") ~ "Terapia de relajación",
+      codigo_str %in% c("90880") ~ "Sesión de hipnoterapia",
+      codigo_str %in% c("90849") ~ "Psicoterapia grupal",
+      codigo_str %in% c("90857") ~ "Psicoterapia interactiva",
+      codigo_str %in% c("U900") ~ "Terapia Neural",
+      codigo_str %in% c("U902") ~ "Reflexologia",
+      codigo_str %in% c("U904") ~ "Homeopatia",
+      codigo_str %in% c("U907") ~ "Terapia Floral",
+      codigo_str %in% c("U908") ~ "Bioenergética",
+      codigo_str %in% c("U906") ~ "Trofoterapia",
+      codigo_str %in% c("U905") ~ "Fitoterapia",
+      codigo_str %in% c("97022") ~ "Hidroterapia",
+      codigo_str %in% c("98925", "98926", "98927", "98928", "98929") ~ "Osteopatía",
+      codigo_str %in% c("98940", "98941", "98942", "98943") ~ "Quiropraxia",
+      codigo_str %in% c("97124") ~ "Masoterapia",
+      codigo_str %in% c("Z5102", "U901") ~ "Laserterapia",
+      codigo_str %in% c("U080") ~ "Consejeria Med. Comp.",
+      TRUE ~ "Otro Procedimiento MC"
+    )
+  ) %>%
+  # Seleccionamos solo las llaves necesarias
+  select(id_cita, Categoria_Procedimiento) %>%
+  # ¡IMPORTANTE! Si en una cita hicieron 2 procedimientos, esto duplicaría filas.
+  # Nos quedamos con los únicos (o podrías priorizar uno si quisieras)
+  distinct(id_cita, .keep_all = TRUE)
+
+
+# 3. PROPAGACIÓN Y FILTRADO
+df_morbilidad_real <- df_ind %>%
+  # A. Unimos con el diccionario (Left Join propagará la categoría a todas las filas de esa cita)
+  left_join(diccionario_citas_procedimientos, by = "id_cita") %>%
+  
+  # B. FILTRADO (Exclusión)
+  filter(
+    # 1. Eliminamos las filas que SON los procedimientos de la lista
+    !codigo %in% codigos_interes,
+    
+    # 2. Aseguramos que lo que queda sea un CIE-10 válido (Empieza con letra)
+    # Esto limpia insumos, labconf u otros códigos numéricos que no sean de tu lista
+    str_detect(codigo, "^[A-Za-z]"),
+    
+    # 3. (Opcional) Nos quedamos solo con las citas que SI tuvieron algun procedimiento MC
+    !is.na(Categoria_Procedimiento)
+  )
+
+# --- Verificación ---
+# Ahora df_morbilidad_real tiene filas como "M545" (Lumbago) 
+# pero con la columna Categoria_Procedimiento llena con "Acupuntura" (si se hizo en esa cita).
+
+
+# 4. CÁLCULO DEL TOP 20
+top20_diagnosticos <- df_morbilidad_real %>%
+  group_by(codigo) %>%
+  summarise(
+    Pacientes = n_distinct(ID_paciente),
+    # Opcional: Podrías ver cuál fue la terapia más común para este diagnóstico
+    Terapia_Principal = names(which.max(table(Categoria_Procedimiento)))
+  ) %>%
+  arrange(desc(Pacientes)) %>%
+  head(20)
+
+# 5. GRÁFICO
+plot_ly(top20_diagnosticos, 
+        x = ~Pacientes, 
+        y = ~reorder(codigo, Pacientes), 
+        type = 'bar', 
+        orientation = 'h',
+        marker = list(color = '#c0392b'), # Rojo oscuro
+        text = ~paste("CIE-10:", codigo, 
+                      "<br>Pacientes:", Pacientes,
+                      "<br>Terapia Frecuente:", Terapia_Principal),
+        hoverinfo = "text") %>%
+  layout(
+    title = "Top 20 Diagnósticos (Filtrando Procedimientos)",
+    xaxis = list(title = "Número de Pacientes Únicos"),
+    yaxis = list(title = "Código CIE-10"),
+    margin = list(l = 100)
+  )
+```
+## Datos Fuente
+```{r}
+make_download_table(top20_diagnosticos, "top20_diagnosticos_filtrado")
+```
+:::
+
+## 4.Perfil Clínico por Terapia (Treemap)
+::: {.panel-tabset}
+## Gráfico
+Este gráfico muestra la composición clínica de cada terapia. El tamaño del recuadro representa la cantidad de pacientes.
+
+```{r}
+#| label: plot-treemap-top5-fixed
+#| warning: false
+
+# 1. PREPARAR DATOS DE LOS "HIJOS" (Diagnósticos)
+# Agrupamos, contamos y filtramos el Top 5
+df_hijos <- df_morbilidad_real %>%
+  group_by(Categoria_Procedimiento, codigo) %>%
+  summarise(Pacientes = n_distinct(ID_paciente), .groups = 'drop') %>%
+  group_by(Categoria_Procedimiento) %>%
+  slice_max(Pacientes, n = 5) %>% # <--- AQUÍ LIMITAMOS A LOS 5 PRIMEROS
+  ungroup() %>%
+  mutate(
+    # Creamos un ID único para evitar errores si el M545 se repite en varias terapias
+    ids = paste(Categoria_Procedimiento, codigo, sep = "-"),
+    labels = paste0(codigo, "\n(", format(Pacientes, big.mark=","), ")"),
+    parents = Categoria_Procedimiento # Su padre es la Terapia
+  )
+
+# 2. PREPARAR DATOS DE LOS "PADRES" (Las Terapias)
+# Calculamos la suma de sus hijos (Top 5) para que el tamaño cuadre
+df_padres <- df_hijos %>%
+  group_by(Categoria_Procedimiento) %>%
+  summarise(Pacientes = sum(Pacientes), .groups = 'drop') %>%
+  mutate(
+    ids = Categoria_Procedimiento,
+    labels = Categoria_Procedimiento,
+    parents = "" # Los padres no tienen padre (son la raíz)
+  )
+
+# 3. UNIR TODO EN UNA SOLA TABLA
+df_treemap_final <- bind_rows(df_padres, df_hijos)
+
+# 4. GENERAR EL TREEMAP ROBUSTO
+plot_ly(
+  df_treemap_final,
+  type = "treemap",
+  ids = ~ids,                 # Identificador único técnico
+  labels = ~labels,           # Lo que se lee en la caja
+  parents = ~parents,         # Quién contiene a quién
+  values = ~Pacientes,        # Tamaño de la caja
+  branchvalues = "total",     # Importante: fuerza a que el padre sea la suma de hijos
+  textinfo = "label+percent parent",
+  hoverinfo = "label+value+percent parent"
+) %>%
+  layout(
+    title = "Top 5 Diagnósticos por Terapia",
+    margin = list(t=50, l=0, r=0, b=0)
+  )
+```
+
+## Datos Fuente
+```{r}
+make_download_table(df_treemap_final, "perfil_clinico_por_terapia")
+```
+:::
+
+
+
+
+
+[^1]: Etapas de vida:
+
+    **Niño:** Menor de 12 años, **Adolescente:** Entre 12 a 17 años, **Adulto:** Entre 18 a 59 años, **Adulto mayor:** 60 años a más.
+    
+[^2]: Género:
+
+    **M:** Masculino, **F:** Femenino.

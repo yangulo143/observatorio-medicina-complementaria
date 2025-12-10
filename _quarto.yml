@@ -1,0 +1,25 @@
+project:
+  type: website
+  output-dir: docs
+  render:
+    - index.qmd
+    - individuales.qmd
+    - grupales.qmd
+
+website:
+  title: "Observatorio de Medicina Complementaria (2019-2024)"
+  navbar:
+    left:
+      - href: index.qmd
+        text: "Inicio"
+      - href: individuales.qmd
+        text: "Atenciones Individuales"
+      - href: grupales.qmd
+        text: "Actividades Grupales"
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+    code-fold: true
+    self-contained: true

@@ -1,0 +1,310 @@
+---
+title: "Indicadores individuales de Medicina Complementaria"
+subtitle: "Análisis de datos del Ministerio de Salud (MINSA)"
+date: last-modified
+format: 
+  dashboard:
+    theme: cosmo
+    orientation: rows
+server: shiny
+---
+
+```{r}
+#| context: setup
+#| include: false
+
+# 1. LIBRERIAS
+library(shiny)
+library(tidyverse)
+library(plotly)
+library(DT)
+library(leaflet)
+library(shinyWidgets) 
+library(shinydashboard)
+# Para selectores bonitos
+
+# 2. CARGA DE DATOS (Solo una vez al inicio)
+# Asegúrate de que df_individuales tenga columnas de latitud/longitud si quieres mapa
+df_ind <- readRDS("data/df_individuales.rds")
+
+# Si no tienes coordenadas reales, simularé unas para que el código no falle (BORRAR ESTO LUEGO)
+#if(!"lat" %in% names(df_ind)) {
+  #df_ind$lat <- -12.046374 + runif(nrow(df_ind), -1, 1)
+  #df_ind$lng <- -77.042793 + runif(nrow(df_ind), -1, 1)
+#}
+
+# 3. LISTAS PARA FILTROS
+anios_disponibles <- sort(unique(df_ind$ano))
+# Asumiendo que tienes nombres de regiones/departamentos
+regiones_disponibles <- sort(unique(df_ind$Ubigeo_res))
+```
+
+# Dashboard
+
+{.sidebar}
+
+### Filtros Globales
+
+Estos filtros afectan a **todos** los indicadores del tablero simultáneamente.
+
+```{r}
+#| title: "Panel de Control"
+
+selectInput("filtro_ano", "Seleccione Año:", 
+            choices = anios_disponibles, 
+            selected = max(anios_disponibles),
+            multiple = TRUE) # Permitir varios años
+
+# Usamos pickerInput para selecciones múltiples más limpias
+pickerInput("filtro_ubigeo", "Seleccione Ubigeo:",
+            choices = regiones_disponibles,
+            options = list(`actions-box` = TRUE),
+            multiple = TRUE)
+
+selectInput("filtro_sexo", "Sexo:",
+            choices = c("Todos", unique(df_ind$sexo)))
+
+hr()
+helpText("Nota: Los indicadores se recalculan automáticamente al cambiar los filtros.")
+```
+
+```{r}
+#| title: "Panel de Control"
+
+selectInput("filtro_ano", "Seleccione Año:", 
+            choices = anios_disponibles, 
+            selected = max(anios_disponibles),
+            multiple = TRUE) # Permitir varios años
+
+# Usamos pickerInput para selecciones múltiples más limpias
+pickerInput("filtro_ubigeo", "Seleccione Ubigeo:",
+            choices = regiones_disponibles,
+            options = list(`actions-box` = TRUE),
+            multiple = TRUE)
+
+selectInput("filtro_sexo", "Sexo:",
+            choices = c("Todos", unique(df_ind$sexo)))
+
+hr()
+helpText("Nota: Los indicadores se recalculan automáticamente al cambiar los filtros.")
+```
+
+```{r}
+#| context: server
+
+# --- MOTOR DE REACTIVIDAD (El "Corazón" de Shiny) ---
+# Esta función crea una 'copia' filtrada de la base de datos
+# cada vez que el usuario mueve un filtro.
+
+data_filtrada <- reactive({
+  
+  d <- df_ind
+  
+  # Filtro Año
+  if (!is.null(input$filtro_ano)) {
+    d <- d %>% filter(ano %in% input$filtro_ano)
+  }
+  
+  # Filtro Ubigeo (si no está vacío)
+  if (!is.null(input$filtro_ubigeo)) {
+    d <- d %>% filter(Ubigeo_res %in% input$filtro_ubigeo)
+  }
+  
+  # Filtro Sexo
+  if (input$filtro_sexo != "Todos") {
+    d <- d %>% filter(sexo == input$filtro_sexo)
+  }
+  
+  return(d)
+})
+```
+
+```{r}
+#| context: server
+
+# --- MOTOR DE REACTIVIDAD (El "Corazón" de Shiny) ---
+# Esta función crea una 'copia' filtrada de la base de datos
+# cada vez que el usuario mueve un filtro.
+
+data_filtrada <- reactive({
+  
+  d <- df_ind
+  
+  # Filtro Año
+  if (!is.null(input$filtro_ano)) {
+    d <- d %>% filter(ano %in% input$filtro_ano)
+  }
+  
+  # Filtro Ubigeo (si no está vacío)
+  if (!is.null(input$filtro_ubigeo)) {
+    d <- d %>% filter(Ubigeo_res %in% input$filtro_ubigeo)
+  }
+  
+  # Filtro Sexo
+  if (input$filtro_sexo != "Todos") {
+    d <- d %>% filter(sexo == input$filtro_sexo)
+  }
+  
+  return(d)
+})
+```
+Row {height=20%}
+
+```{r}
+
+#| content: valuebox
+#| title: "Total Atenciones"
+
+# ValueBox Dinámico
+renderValueBox({
+  n <- nrow(data_filtrada())
+  valueBox(format(n, big.mark=","), icon = "fa-user-md", color = "primary")
+})
+
+```
+
+```{r}
+#| content: valuebox
+#| title: "Pacientes Únicos"
+
+renderValueBox({
+  n <- n_distinct(data_filtrada()$ID_paciente)
+  valueBox(format(n, big.mark=","), icon = "fa-users", color = "success")
+})
+```
+
+```{r}
+#| content: valuebox
+#| title: "Establecimientos Activos"
+
+renderValueBox({
+  n <- n_distinct(data_filtrada()$renaes)
+  valueBox(n, icon = "fa-hospital", color = "warning")
+})
+```
+
+Row {height=45%}
+
+## Pirámide Poblacional
+
+```{r}
+plotlyOutput("plot_piramide")
+```
+
+```{r}
+#| context: server
+output$plot_piramide <- renderPlotly({
+  
+  req(nrow(data_filtrada()) > 0)
+  
+  # Preparar datos pirámide
+  df_pyr <- data_filtrada() %>%
+    group_by(sexo, ciclo_vida) %>% # Asegúrate de que ciclo_vida sea factor ordenado
+    summarise(n = n_distinct(ID_paciente), .groups = 'drop') %>%
+    mutate(n_plot = ifelse(sexo == "M", -n, n)) # Hombres negativos para el lado izq
+  
+  plot_ly(df_pyr, x = ~n_plot, y = ~ciclo_vida, color = ~sexo, type = 'bar', orientation = 'h') %>%
+    layout(barmode = 'overlay',
+           title = "Estructura Demográfica",
+           xaxis = list(title = "Población (Hombres < 0 | Mujeres > 0)"),
+           yaxis = list(title = ""))
+})
+```
+
+## Mapa de georreferenciación
+```{r}
+leafletOutput("mapa_pacientes")
+```
+```{r}
+#| context: server
+output$mapa_pacientes <- renderLeaflet({
+  
+  # Agrupar por ubicación para no saturar el mapa con millones de puntos
+  df_map <- data_filtrada() %>%
+    group_by(lat, lng, Ubigeo_res) %>% # Asumiendo que tienes lat/lng
+    summarise(conteo = n(), .groups = 'drop')
+  
+  leaflet(df_map) %>%
+    addTiles() %>%
+    addCircleMarkers(
+      lng = ~lng, lat = ~lat,
+      radius = ~log(conteo) * 3, # Tamaño según volumen
+      popup = ~paste("Ubigeo:", Ubigeo_res, "<br>Atenciones:", conteo),
+      color = "#0d6efd", fillOpacity = 0.6
+    )
+})
+```
+
+Row {height=35%}
+## Atenciones por Etnia
+
+```{r}
+plotlyOutput("plot_etnia")
+
+```
+
+```{r}
+#| context: server
+output$plot_etnia <- renderPlotly({
+  d <- data_filtrada() %>% count(Et, sort=TRUE) %>% head(10)
+  plot_ly(d, x=~n, y=~reorder(Et, n), type='bar', orientation='h', marker=list(color='#198754')) %>%
+    layout(title="Top Etnias", xaxis=list(title=""), yaxis=list(title=""))
+})
+```
+## Atenciones por financiador
+```{r}
+plotlyOutput("plot_financiador")
+```
+
+```{r}
+#| context: server
+output$plot_financiador <- renderPlotly({
+  d <- data_filtrada() %>% count(Fi, sort=TRUE)
+  plot_ly(d, labels=~Fi, values=~n, type='pie') %>%
+    layout(title="Distribución por Financiador")
+})
+```
+
+## Diagnosticos de consulta
+```{r}
+tableOutput("tabla_cie10")
+```
+
+```{r}
+#| context: server
+output$tabla_cie10 <- renderTable({
+  data_filtrada() %>%
+    filter(diagnost == "D") %>%
+    count(codigo, sort = TRUE) %>%
+    head(5) %>%
+    rename(CIE10 = codigo, Casos = n)
+})
+```
+
+Row {height=40%}
+
+## Establecimientos que proveen atenciones (2019-2025)
+
+```{r}
+DTOutput("tabla_renaes")
+```
+
+```{r}
+#| context: server
+output$tabla_renaes <- renderDT({
+  
+  # Tabla solicitada: Renaes + Codigo Med Comp + Conteo
+  tabla_resumen <- data_filtrada() %>%
+    group_by(renaes, codigo) %>% # Agrupamos por establecimiento y procedimiento
+    summarise(Numero_Atenciones = n(), .groups = 'drop') %>%
+    arrange(desc(Numero_Atenciones))
+  
+  datatable(tabla_resumen,
+            options = list(pageLength = 5, scrollX = TRUE),
+            rownames = FALSE,
+            filter = "top") # Agrega filtros tipo Excel en las columnas
+})
+```
+
+
+

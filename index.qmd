@@ -1,0 +1,275 @@
+---
+title: "Tablero de Control: Medicina Complementaria (2019-2024)"
+subtitle: "Análisis de datos del Ministerio de Salud (MINSA)"
+date: last-modified
+author: "Subdirección de Medicina Complementaria (SUMEC-CENSI)"
+format: 
+  html:
+    theme: cosmo
+    toc: true
+    page-layout: full
+    code-fold: true
+footer: "Fuente de datos: Sistema HISS-MINSA | Fecha de corte: 05/2025"
+---
+
+```{r setup, include=FALSE}
+# --- 1. LIBRERÍAS ---
+library(tidyverse)
+library(plotly)
+library(DT)
+library(lubridate)
+library(knitr)
+
+# --- 2. CARGA DE DATOS ---
+# Se asume que ya ejecutaste el script de limpieza y guardaste los .rds en la carpeta 'data'
+df_ind  <- readRDS("data/df_individuales.rds")
+df_grup <- readRDS("data/df_grupales.rds")
+
+# --- 3. PRE-CÁLCULO DE INDICADORES GENERALES ---
+
+# A. Indicadores Individuales
+
+codigos_interes <- c("97810", "97811", "97813", "97814", "U0903", "90861", "90880", "90849", "90857", "U0900", "U0902", "U0904", "U0907", "U0908", "U0901", "U0905", "U0906", "97022", "98925", "98926", "98927", "98928", "98929", "98940", "98941", "98942", "98943", "97124", "Z5102", "U0080", "U900", "U902", "U904", "U907", "U908", "U901", "U905", "U906", "U903", "U080")
+
+total_atenciones <- df_ind %>%
+  filter(codigo %in% codigos_interes) %>%
+  nrow()
+
+total_atendidos  <- n_distinct(df_ind$ID_paciente)
+
+# B. Indicadores Grupales (Suma de columna labconf convertida a numérico)
+# Nota: Nos aseguramos de limpiar labconf de posibles textos
+total_beneficiarios_grup <- df_grup %>%
+  mutate(participantes = as.numeric(as.character(labconf))) %>%
+  summarise(total = sum(participantes, na.rm = TRUE)) %>%
+  pull(total)
+
+# C. Preparación de Data para Gráfico Temporal (Mensual)
+tendencia_mensual <- df_ind %>%
+  filter(codigo %in% codigos_interes) %>%
+  group_by(ano, mes) %>%
+  summarise(Atenciones = n(), .groups = 'drop') %>%
+  mutate(
+    # Crear fecha ficticia (día 1) para que el eje X entienda el tiempo
+    fecha = make_date(ano, mes, 1) 
+  ) %>%
+  arrange(fecha)
+
+# 2. Tendencia de Atendidos (Pacientes únicos por mes)
+tendencia_atendidos <- df_ind %>%
+  group_by(ano, mes) %>%
+  summarise(valor = n_distinct(ID_paciente), .groups = 'drop') %>%
+  mutate(fecha = make_date(ano, mes, 1)) %>%
+  arrange(fecha)
+
+# 3. Tendencia de Beneficiarios Grupales (Suma de participantes)
+tendencia_grupales <- df_grup %>%
+  mutate(part = suppressWarnings(as.numeric(as.character(labconf)))) %>%
+  group_by(ano, mes) %>%
+  summarise(valor = sum(part, na.rm = TRUE), .groups = 'drop') %>%
+  mutate(fecha = make_date(ano, mes, 1)) %>%
+  arrange(fecha)
+
+
+# D. Preparación de Data para Tabla Anual
+resumen_anual <- df_ind %>%
+  group_by(ano) %>%
+  summarise(
+    Atenciones_Ind = sum(codigo %in% codigos_interes),
+    Atendidos_Unicos = n_distinct(ID_paciente)
+  ) %>%
+  left_join(
+    df_grup %>%
+      mutate(part = as.numeric(as.character(labconf))) %>%
+      group_by(ano) %>%
+      summarise(Beneficiarios_Grupales = sum(part, na.rm = TRUE)),
+    by = "ano"
+  )
+
+# --- FUNCIÓN AUXILIAR PARA TABLAS DE DESCARGA ---
+# Esta función crea estandariza el botón de Excel para todos los gráficos
+make_download_table <- function(data_input, filename_label = "datos") {
+  datatable(
+    data_input,
+    extensions = 'Buttons',
+    rownames = FALSE,
+    options = list(
+      dom = 'Bfrtip',
+      buttons = list(
+        list(extend = 'excel', filename = filename_label, title = filename_label),
+        list(extend = 'csv', filename = filename_label)
+      ),
+      pageLength = 5, # Pocas filas para no ocupar mucho espacio
+      scrollX = TRUE,
+      language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json')
+    )
+  )
+}
+
+```
+
+## Resumen Ejecutivo
+
+::::::::: grid
+:::: g-col-4
+::: {style="background-color: #e7f1ff; border-left: 5px solid #0d6efd; padding: 15px; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"}
+[Total Atenciones (Ind)]{style="color: #6c757d; font-size: 0.9rem; text-transform: uppercase; font-weight: bold;"}
+
+<h3 style="font-size: 2.5rem; font-weight: 700; margin: 0; color: #0d6efd;">
+
+`r format(total_atenciones, big.mark=",")`
+
+</h3>
+
+<small style="color: #6c757d;">Producción HIS registrada</small>
+:::
+::::
+
+:::: g-col-4
+::: {style="background-color: #e6fffa; border-left: 5px solid #198754; padding: 15px; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"}
+[Total Pacientes]{style="color: #6c757d; font-size: 0.9rem; text-transform: uppercase; font-weight: bold;"}
+
+<h3 style="font-size: 2.5rem; font-weight: 700; margin: 0; color: #198754;">
+
+`r format(total_atendidos, big.mark=",")`
+
+</h3>
+
+<small style="color: #6c757d;">Personas únicas atendidas</small>
+:::
+::::
+
+:::: g-col-4
+::: {style="background-color: #fff3cd; border-left: 5px solid #ffc107; padding: 15px; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"}
+[Beneficiarios (Grupales)]{style="color: #6c757d; font-size: 0.9rem; text-transform: uppercase; font-weight: bold;"}
+
+<h3 style="font-size: 2.5rem; font-weight: 700; margin: 0; color: #ffc107;">
+
+`r format(total_beneficiarios_grup, big.mark=",")`
+
+</h3>
+
+<small style="color: #6c757d;">Participantes en talleres</small>
+:::
+::::
+:::::::::
+
+# Gráficos resumen
+
+::: {.callout-note}
+**Instrucciones:** Todos los gráficos a continuación incluyen una pestaña llamada **"Datos Fuente"**. Haga clic en ella para ver la tabla y descargar la información en Excel.
+:::
+
+# Análisis de Tendencia
+## Evolución de atenciones (mensual)
+
+::: panel-tabset
+## Gráfico
+El siguiente gráfico muestra la curva epidémica de la demanda de servicios de Medicina Complementaria. Permite identificar estacionalidad e impacto de eventos externos (ej. Pandemia COVID-19).
+
+```{r}
+#| label: plot-tendencia
+#| fig-height: 5
+
+plot_ly(tendencia_mensual, x = ~fecha, y = ~Atenciones, 
+        type = 'scatter', mode = 'lines+markers',
+        line = list(color = '#0d6efd', width = 2),
+        marker = list(size = 6),
+        text = ~paste("Año:", ano, "<br>Mes:", mes, "<br>Atenciones:", Atenciones),
+        hoverinfo = "text") %>%
+  layout(
+    title = "Evolución Mensual de Atenciones Individuales",
+    xaxis = list(title = "Tiempo (Mes/Año)", tickformat = "%m-%Y"),
+    yaxis = list(title = "Número de Atenciones"),
+    hovermode = "x unified"
+  )
+```
+## Datos Fuente
+```{r}
+make_download_table(tendencia_mensual, "tendencia_mensual")
+```
+
+:::
+
+
+### Evolución de personas atendidas (mensual)
+
+::: {.panel-tabset}
+
+## Gráfico
+
+El siguiente gráfico muestra la curva epidémica de las personas atendidas por servicios de Medicina Complementaria. Permite identificar estacionalidad e impacto de eventos externos (ej. Pandemia COVID-19).
+
+```{r}
+#| label: plot-atendidos
+#| fig-height: 5
+
+plot_ly(tendencia_atendidos, x = ~fecha, y = ~valor, 
+        type = 'scatter', mode = 'lines+markers',
+        line = list(color = '#198754', width = 3),
+        marker = list(size = 6, color = '#146c43'),
+        text = ~paste("Fecha:", format(fecha, "%m-%Y"), "<br>Pacientes Únicos:", valor),
+        hoverinfo = "text") %>%
+  layout(
+    title = list(text = "<b>Histórico de Personas Atendidas</b>", x=0),
+    xaxis = list(title = "", tickformat = "%b %Y"),
+    yaxis = list(title = "Nro. Personas"),
+    hovermode = "x unified"
+  )
+```
+## Datos Fuente
+```{r}
+make_download_table(tendencia_atendidos, "tendencia_atendidos")
+```
+
+:::
+
+### Evolución de beneficiarios de actividades grupales (mensual)
+
+::: {.panel-tabset}
+
+## Gráfico
+
+El siguiente gráfico muestra la curva epidémica de las personas beneficiadas por actividades grupales de Medicina Complementaria. Permite identificar estacionalidad e impacto de eventos externos (ej. Pandemia COVID-19).
+
+```{r}
+#| label: plot-grupales
+#| fig-height: 5
+
+plot_ly(tendencia_grupales, x = ~fecha, y = ~valor, 
+        type = 'scatter', mode = 'lines+markers',
+        line = list(color = '#ffc107', width = 3),
+        marker = list(size = 6, color = '#d39e00'),
+        text = ~paste("Fecha:", format(fecha, "%m-%Y"), "<br>Participantes:", valor),
+        hoverinfo = "text") %>%
+  layout(
+    title = list(text = "<b>Histórico de Participantes en Talleres</b>", x=0),
+    xaxis = list(title = "", tickformat = "%b %Y"),
+    yaxis = list(title = "Nro. Participantes"),
+    hovermode = "x unified"
+  )
+```
+
+## Datos Fuente
+```{r}
+make_download_table(tendencia_grupales, "tendencia_grupales")
+```
+
+:::
+
+### Resumen por Año (Tabla)
+
+::: {.panel-tabset}
+
+## Producción anual en Medicina Complementaria
+
+Consolidado de la producción anual comparando la vertiente individual y la grupal.
+
+```{r}
+datatable(resumen_anual, 
+          options = list(pageLength = 10, dom = 't'),
+          colnames = c("Año", "Atenciones (Ind)", "Atendidos (Ind)", "Beneficiarios (Grupales)"),
+          caption = "Tabla 1: Producción anual de Medicina Complementaria")
+
+```
+:::

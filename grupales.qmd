@@ -1,0 +1,203 @@
+---
+title: "Indicadores grupales: Medicina Complementaria (2019-2024)"
+subtitle: "Análisis de datos del Ministerio de Salud (MINSA)"
+date: last-modified
+author: "Subdirección de Medicina Complementaria (SUMEC-CENSI)"
+format: 
+  html:
+    theme: cosmo
+    toc: true
+    page-layout: full
+    code-fold: true
+footer: "Fuente de datos: Sistema HISS-MINSA | Fecha de corte: 05/2025"
+--- 
+
+```{r}
+#| label: setup-grupales
+#| warning: false
+#| message: false
+
+library(tidyverse)
+library(plotly)
+library(DT)
+library(lubridate)
+
+# 1. CARGA DE DATOS
+tryCatch({
+  df_grup <- readRDS("data/df_grupales.rds")
+}, error = function(e) {
+  stop("Error: No se encuentra df_grupales.rds")
+})
+
+# 2. LIMPIEZA DE DATOS
+df_grup_clean <- df_grup %>%
+  mutate(
+    # Convertimos labconf a numérico (Número de Participantes)
+    Participantes = suppressWarnings(as.numeric(as.character(labconf))),
+    Participantes = replace_na(Participantes, 0),
+    
+    # Fecha para series de tiempo
+    fecha = make_date(ano, mes, 1)
+  )
+
+# --- FUNCIÓN AUXILIAR PARA TABLAS DE DESCARGA ---
+# Esta función crea estandariza el botón de Excel para todos los gráficos
+make_download_table <- function(data_input, filename_label = "datos") {
+  datatable(
+    data_input,
+    extensions = 'Buttons',
+    rownames = FALSE,
+    options = list(
+      dom = 'Bfrtip',
+      buttons = list(
+        list(extend = 'excel', filename = filename_label, title = filename_label),
+        list(extend = 'csv', filename = filename_label)
+      ),
+      pageLength = 5, # Pocas filas para no ocupar mucho espacio
+      scrollX = TRUE,
+      language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json')
+    )
+  )
+}
+
+```
+
+## 1. Análisis Temático (¿Qué actividades se realizan?)
+En este gráfico se muestran todos los códigos registrados. Dado que una misma sesión puede abordar múltiples temas, aquí se cuentan todas las actividades individuales.
+
+::: panel-tabset
+## Grafico
+
+```{r}
+#| label: plot-tematico
+#| warning: false
+
+# Agrupamos por Código para ver cuáles son los temas más frecuentes
+resumen_temas <- df_grup_clean %>%
+  group_by(codigo) %>%
+  summarise(
+    # Frecuencia: Cuántas veces aparece este código en los registros
+    Frecuencia_Tematica = n(),
+    # Alcance: Suma de participantes expuestos a este tema
+    Personas_Expuestas = sum(Participantes, na.rm = TRUE)
+  ) %>%
+  arrange(desc(Personas_Expuestas)) %>%
+  head(15) # Top 15 para que el gráfico sea legible
+
+# Gráfico de Barras
+plot_ly(resumen_temas, 
+        x = ~Personas_Expuestas, 
+        y = ~reorder(codigo, Personas_Expuestas), 
+        type = 'bar', 
+        orientation = 'h',
+        text = ~paste("<b>Código:</b>", codigo,
+                      "<br><b>Veces impartido:</b>", Frecuencia_Tematica,
+                      "<br><b>Personas expuestas:</b>", format(Personas_Expuestas, big.mark=",")),
+        hoverinfo = "text",
+        marker = list(color = '#8e44ad')) %>%
+  layout(
+    title = "Top 15 Temáticas Grupales (Por Asistentes)",
+    xaxis = list(title = "Suma de Participantes"),
+    yaxis = list(title = "Código de Actividad"),
+    margin = list(l = 100)
+  )
+```
+
+## Tabla
+```{r}
+make_download_table(resumen_temas, "resumen_temas")
+```
+
+:::
+
+## 2. Análisis Operativo (Esfuerzo del Personal)
+Aquí analizamos las Sesiones Reales. Si en una reunión (id_cita) se trataron 3 temas, aquí cuenta como 1 sola sesión realizada, para no duplicar el esfuerzo logístico en la visualización temporal.
+
+::: panel-tabset
+## Evolución de Sesiones (Cantidad de Reuniones)
+Muestra cuántas veces el equipo de salud organizó una actividad grupal por mes.
+```{r}
+#| label: plot-sesiones-tiempo
+#| warning: false
+
+# Lógica: Agrupar por Mes y contar ID_CITA únicos
+tendencia_sesiones <- df_grup_clean %>%
+  group_by(fecha) %>%
+  summarise(
+    Sesiones_Reales = n_distinct(id_cita) # Conteo de eventos únicos
+  )
+
+plot_ly(tendencia_sesiones, x = ~fecha, y = ~Sesiones_Reales, 
+        type = 'scatter', mode = 'lines+markers',
+        line = list(color = '#d35400', width = 3),
+        name = "Sesiones") %>%
+  layout(
+    title = "Evolución Mensual: Nro. de Sesiones Realizadas",
+    xaxis = list(title = "", tickformat = "%b %Y"),
+    yaxis = list(title = "Cantidad de Sesiones"),
+    hovermode = "x unified"
+  )
+```
+## Tabla
+```{r}
+make_download_table(tendencia_sesiones, "tendencia_sesiones")
+```
+
+## Evolución de Participantes (Alcance Comunitario)
+Muestra cuántas personas asistieron en total por mes. Nota: Se toma el máximo de participantes por sesión para evitar duplicados si la misma gente escuchó 3 temas en la misma cita.
+
+```{r}
+#| label: plot-participantes-tiempo
+#| warning: false
+
+# Lógica compleja para no duplicar gente en la misma sesión:
+# 1. Por cada cita única, tomamos el MÁXIMO de participantes registrado en sus filas
+# (Asumimos que es el mismo grupo de personas escuchando varios temas)
+tendencia_participantes <- df_grup_clean %>%
+  group_by(fecha, id_cita) %>%
+  summarise(Asistentes_Sesion = max(Participantes, na.rm=TRUE), .groups = 'drop_last') %>%
+  # 2. Sumamos por mes
+  summarise(Total_Participantes = sum(Asistentes_Sesion))
+
+plot_ly(tendencia_participantes, x = ~fecha, y = ~Total_Participantes, 
+        type = 'bar', # Barras para volumen de gente
+        marker = list(color = '#f39c12'),
+        name = "Participantes") %>%
+  layout(
+    title = "Evolución Mensual: Personas Atendidas en Grupal",
+    xaxis = list(title = "", tickformat = "%b %Y"),
+    yaxis = list(title = "Total Asistentes"),
+    hovermode = "x unified"
+  )
+```
+## Tabla
+```{r}
+make_download_table(tendencia_participantes, "tendencia_participantes")
+```
+
+:::
+
+## 3. Resumen de Datos (Tabla)
+
+```{r}
+#| label: tabla-grupales
+#| warning: false
+
+# Generamos una tabla que consolida la información
+tabla_resumen <- df_grup_clean %>%
+  group_by(codigo) %>%
+  summarise(
+    Temas_Impartidos = n(), # Cuántas veces aparece el código
+    Sesiones_Unicas_Presente = n_distinct(id_cita), # En cuántas sesiones distintas apareció
+    Total_Asistentes = sum(Participantes, na.rm=TRUE)
+  ) %>%
+  arrange(desc(Total_Asistentes))
+
+datatable(tabla_resumen,
+          extensions = 'Buttons',
+          options = list(dom = 'Bfrtip', buttons = c('copy', 'excel')),
+          rownames = FALSE,
+          colnames = c("Código Actividad", "Frecuencia (Temas)", "Sesiones Únicas", "Total Asistentes")
+)
+```
+

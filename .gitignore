@@ -1,0 +1,26 @@
+# --- DATOS (BLOQUEO TOTAL) ---
+data/
+Data/
+datos/
+*.rds
+*.RDS
+*.RData
+*.xlsx
+*.xls
+*.csv
+*.txt
+*.json
+
+# --- RSTUDIO Y SISTEMA ---
+.Rproj.user
+.Rhistory
+.RData
+.quarto/
+*.docx
+*.pptx
+.2002-2022/
+*.csv
+# --- ONEDRIVE Y WINDOWS ---
+Thumbs.db
+Desktop.ini
+~$*
