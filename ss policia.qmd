@@ -1,0 +1,563 @@
+---
+title: "Indicadores individuales: Medicina Complementaria (2019-2024)"
+subtitle: "Análisis de datos de SALUDPOL (Policia Nacional del Perú)"
+author: "Subdirección de Medicina Complementaria (SUMEC-CENSI)"
+date: last-modified
+format: 
+  html:
+    toc: true
+    toc-title: "Contenido"
+    theme: cosmo
+    code-fold: true
+    self-contained: true
+    page-layout: full
+editor: visual
+footer: "Fuente de datos: SALUDPOL| Fecha de corte: 11/2025"
+---
+
+```{r setup, include=FALSE}
+# 1. CARGA DE LIBRERÍAS
+library(tidyverse)
+library(readxl)
+library(sf)             # Manejo de mapas
+library(rnaturalearth)  # Geometría oficial (Shapefiles)
+library(plotly)         # Gráficos interactivos
+library(DT)             # Tablas interactivas
+library(viridis)        # Paletas de colores profesionales
+library(stringi)        # Manejo de textos (tildes)
+
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+
+# --- RUTAS DE TUS ARCHIVOS YA LIMPIOS ---
+# Asegúrate de que las columnas se llamen: anio, cantidad, y (DIAGNOSTICO/EDAD/REGION)
+ruta_diag   <- "datos_tidy_cpms.xlsx"
+ruta_edad   <- "datos_tidy_edad.xlsx"
+ruta_region <- "datos_tidy_region.xlsx"
+
+# Cargamos simulando que ya existen (ajusta tus rutas reales arriba)
+# Usamos tryCatch para que el reporte compile aunque no tengas los archivos en la ruta exacta ahora mismo
+df_diag <- read_excel(ruta_diag)
+df_edad <- read_excel(ruta_edad)
+df_region <- read_excel(ruta_region)
+
+# NOTA: Si tus columnas tienen nombres distintos al cargar, 
+# descomenta y ajusta esta línea para estandarizar:
+colnames(df_region) <- c("REGION", "anio", "cpms_codigo", "cantidad")
+
+# Asumiendo que tu dataframe se llama 'df_edad' y la columna numérica es 'EDAD'
+# Si 'EDAD' venía como texto, asegúrate de convertirla antes: as.integer(EDAD)
+
+df_edad_grupos <- df_edad %>%
+  mutate(
+    # 1. Asegurar que sea número
+    edad_num = suppressWarnings(as.integer(EDAD)),
+    
+    # 2. Crear Categorías (Ciclos de Vida)
+    grupo_etario = case_when(
+      edad_num >= 0  & edad_num <= 11 ~ "1. Niño (0-11)",
+      edad_num >= 12 & edad_num <= 17 ~ "2. Adolescente (12-17)",
+      edad_num >= 18 & edad_num <= 29 ~ "3. Joven (18-29)",
+      edad_num >= 30 & edad_num <= 59 ~ "4. Adulto (30-59)",
+      edad_num >= 60 ~ "5. Adulto Mayor (60+)",
+      TRUE ~ "Sin Dato"
+    ),
+    
+    # 3. Convertir a Factor para que salgan en orden en el gráfico (no alfabético)
+    grupo_etario = factor(grupo_etario, levels = c(
+      "5. Adulto Mayor (60+)", 
+      "4. Adulto (30-59)", 
+      "3. Joven (18-29)", 
+      "2. Adolescente (12-17)", 
+      "1. Niño (0-11)"
+    ))
+  )
+
+
+# --- FUNCIÓN AUXILIAR PARA TABLAS DE DESCARGA ---
+# Esta función crea estandariza el botón de Excel para todos los gráficos
+make_download_table <- function(data_input, filename_label = "datos") {
+  datatable(
+    data_input,
+    extensions = 'Buttons',
+    rownames = FALSE,
+    options = list(
+      dom = 'Bfrtip',
+      buttons = list(
+        list(extend = 'excel', filename = filename_label, title = filename_label),
+        list(extend = 'csv', filename = filename_label)
+      ),
+      pageLength = 5, # Pocas filas para no ocupar mucho espacio
+      scrollX = TRUE,
+      language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json')
+    )
+  )
+}
+
+```
+
+## 1. Tendencias de atenciones en medicina complementaria
+
+::: panel-tabset
+## Gráfico
+
+```{r grafico-lineas, echo=FALSE}
+#| fig-width: 10
+#| fig-height: 5
+
+# 1. Preparar los datos (Usamos df_diag como fuente maestra)
+# Agrupamos todo por año para tener un solo número por periodo
+data_resumen <- df_diag %>%
+  group_by(anio) %>%
+  summarise(
+    total = sum(cantidad), 
+    .groups = "drop"
+  ) %>%
+  mutate(
+    # Calculamos la variación porcentual respecto al año anterior (opcional pero útil)
+    variacion = (total - lag(total)) / lag(total),
+    etiqueta_var = scales::percent(variacion, accuracy = 0.1)
+  )
+
+# 2. Crear el Gráfico Híbrido
+p_tendencia <- ggplot(data_resumen, aes(x = factor(anio), y = total)) +
+  
+  # B. La Línea de Tendencia (Con group=1 para conectar los puntos)
+  geom_line(aes(group = 1), color = "navyblue", size = 1.2) +
+  
+  # C. Los Puntos (Para resaltar el dato exacto)
+  geom_point(color = "navyblue", size = 3,
+             aes(text = paste("Variación vs año anterior:", replace_na(etiqueta_var, "-")))) +
+  
+  # D. Estética
+  theme_minimal() +
+  scale_y_continuous(labels = scales::comma) + # Formato de miles (10,000)
+  labs(
+    title = "Evolución Total de la Producción de Servicios",
+    subtitle = "Tendencia anual de atenciones (CPMS)",
+    x = "Año",
+    y = "N° de Atenciones"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    axis.text.x = element_text(size = 11)
+  )
+
+# 3. Hacerlo interactivo
+ggplotly(p_tendencia, tooltip = "text")
+
+
+```
+
+## Tabla
+
+```{r tabla-tendencia, echo=FALSE}
+make_download_table(data_resumen, "tendencia_atenciones_cpms")
+
+```
+:::
+
+## 2.Atenciones por Edades
+
+::: panel-tabset
+## Gráfico
+
+```{r mapa-calor-edades, echo=FALSE}
+#| fig-width: 10
+#| fig-height: 6
+
+# Agrupamos por Año y Grupo Etario
+data_grafico <- df_edad_grupos %>%
+  filter(!is.na(edad_num)) %>% # Quitamos errores de conversión
+  group_by(anio, grupo_etario) %>%
+  summarise(total = sum(cantidad), .groups = "drop") %>%
+  group_by(anio) %>%
+  mutate(porcentaje = total / sum(total)) # Calculamos % del año
+
+# Gráfico de Barras Apiladas (Interactivo)
+p_edades <- ggplot(data_grafico, aes(
+    x = as.factor(anio), 
+    y = total, 
+    fill = grupo_etario,
+    # El texto que saldrá al pasar el mouse:
+    text = paste0(
+      "Grupo: ", grupo_etario, "<br>",
+      "Atenciones: ", scales::comma(total), "<br>",
+      "Participación: ", scales::percent(porcentaje, accuracy = 0.1)
+    )
+  )) +
+  geom_col(position = "stack", width = 0.7) + # "stack" apila valores absolutos
+  scale_fill_viridis_d(option = "turbo", direction = -1) + # Paleta distintiva
+  theme_minimal() +
+  labs(
+    title = "Evolución de Atenciones por Ciclo de Vida",
+    x = "Año",
+    y = "Número de Atenciones",
+    fill = "Ciclo de Vida"
+  )
+
+ggplotly(p_edades, tooltip = "text")
+```
+
+## Tabla
+
+```{r tabla-edades, echo=FALSE}
+make_download_table(df_edad, "atenciones_por_edad")
+
+```
+:::
+
+## 3.Diagnosticos más atendidos
+
+[^1]
+
+[^1]: 97124: Procedimiento terapéutico de Masajes, 97810: Acupuntura, una o más agujas sin estimulación electrica, 97811: 15 minutos adicionales (en el marco de 97810), 97813: Acupuntura con estimulación electrica, 97814: 15 minutos adicionales (en el marco de 97813), 98929: Manipulación osteopática, 98942: Manipulación quiropráctica.
+
+::: panel-tabset
+## Gráfico
+
+```{r grafico-barras-diagnosticos, echo=FALSE}
+#| fig-width: 10
+#| fig-height: 8
+
+# 1. PREPARACIÓN DE DATOS
+# ---------------------------------------------------------
+if(exists("df_diag")){
+  
+  # A. Calcular totales por Diagnóstico
+  data_totales <- df_diag %>%
+    group_by(DIAGNOSTICO) %>%
+    summarise(total_general = sum(cantidad), .groups = "drop")
+  
+  # B. Encontrar el procedimiento (CPMS) #1 para cada Diagnóstico
+  data_top_cpms <- df_diag %>%
+    group_by(DIAGNOSTICO, cpms_codigo) %>% # Agrupamos por ambos
+    summarise(cantidad_cpms = sum(cantidad), .groups = "drop") %>%
+    arrange(DIAGNOSTICO, desc(cantidad_cpms)) %>%
+    group_by(DIAGNOSTICO) %>%
+    slice(1) %>% # Nos quedamos solo con la primera fila (el ganador)
+    select(DIAGNOSTICO, top_cpms = cpms_codigo, cantidad_cpms)
+
+  # C. Unir todo y filtrar el TOP 15 Diagnósticos para no saturar
+  data_grafico_completo <- data_totales %>%
+    left_join(data_top_cpms, by = "DIAGNOSTICO") %>%
+    slice_max(total_general, n = 15) # Solo los 15 más frecuentes
+  
+  # 2. CREACIÓN DEL GRÁFICO
+  # ---------------------------------------------------------
+  p_barras_detalle <- ggplot(data_grafico_completo, 
+       aes(x = reorder(DIAGNOSTICO, total_general), y = total_general)) +
+    
+    # La Barra Principal
+    geom_col(fill = "#4A69BD", alpha = 0.8, width = 0.7,
+             aes(text = paste("Diagnóstico:", DIAGNOSTICO, 
+                              "<br>Total Atenciones:", total_general,
+                              "<br>Proc. Líder:", top_cpms, 
+                              "<br>Frecuencia Proc:", cantidad_cpms))) +
+    
+    # El Texto dentro de la barra (El código del procedimiento)
+    geom_text(aes(label = paste("Top CPMS:", top_cpms), 
+                  y = total_general / 2), # Posición: En medio de la barra
+              color = "white", fontface = "bold", size = 2) +
+    
+    coord_flip() + # Giramos para leer bien los nombres
+    theme_minimal() +
+    labs(
+      title = "Top 15 Diagnósticos y su Procedimiento Principal",
+      subtitle = "El código dentro de la barra indica el CPMS más frecuente",
+      x = "", # Dejamos vacío el eje X para limpieza visual
+      y = "Total de Atenciones"
+    )
+
+  # 3. INTERACTIVIDAD
+  ggplotly(p_barras_detalle, tooltip = "text")
+}
+
+```
+
+## Tabla
+
+```{r tabla-diagnosticos-detalle, echo=FALSE}
+make_download_table(data_grafico_completo, "diagnosticos")
+```
+:::
+
+## 4.Tendencias de motivos de consulta (CIE-10)
+
+::: panel-tabset
+## Gráfico
+
+```{r grafico-lineas-diagnosticos, echo=FALSE}
+#| fig-height: 6
+
+if(!is.null(df_diag)) {
+  # 1. Identificar el Top 5 de diagnósticos históricos
+  top_5 <- df_diag %>%
+    group_by(DIAGNOSTICO) %>%
+    summarise(total = sum(cantidad)) %>%
+    slice_max(total, n = 5) %>%
+    pull(DIAGNOSTICO)
+
+  # 2. Crear gráfico de líneas
+  p_linea <- df_diag %>%
+    filter(DIAGNOSTICO %in% top_5) %>%
+    group_by(anio, DIAGNOSTICO) %>%
+    summarise(total = sum(cantidad), .groups = "drop") %>%
+    ggplot(aes(x = anio, y = total, color = DIAGNOSTICO)) +
+    geom_line(size = 1) +
+    geom_point(size = 2) +
+    scale_color_brewer(palette = "Set1") +
+    theme_minimal() +
+    labs(title = "Evolución Top 5 Diagnósticos (2019-2024)", y = "Atenciones", x = "Año")
+
+  # 3. Hacerlo interactivo
+  ggplotly(p_linea)
+} else {
+  print("Esperando archivo de diagnósticos...")
+}
+```
+
+## Tabla
+
+```{r tabla-diagnosticos, echo=FALSE}
+make_download_table(df_diag, "diagnosticos_atenciones")
+```
+:::
+
+## 5. Diagnosticos más frecuentes por procedimiento
+
+::: panel-tabset
+## Gráfico
+
+```{r grafico-barras-cpms-diagnosticos, echo=FALSE}
+#| fig-width: 10
+#| fig-height: 8
+
+# 1. PREPARACIÓN DE DATOS (Invertida)
+# ---------------------------------------------------------
+if(exists("df_diag")){
+  
+  # A. Calcular volumen TOTAL por Procedimiento (CPMS)
+  data_totales_cpms <- df_diag %>%
+    group_by(cpms_codigo) %>%
+    summarise(total_general = sum(cantidad), .groups = "drop")
+  
+  # B. Encontrar el Diagnóstico "Ganador" dentro de cada CPMS
+  data_top_dx <- df_diag %>%
+    group_by(cpms_codigo, DIAGNOSTICO) %>% 
+    summarise(cantidad_dx = sum(cantidad), .groups = "drop") %>%
+    arrange(cpms_codigo, desc(cantidad_dx)) %>%
+    group_by(cpms_codigo) %>%
+    slice(1) %>% # Nos quedamos con el diagnóstico #1
+    select(cpms_codigo, top_diag = DIAGNOSTICO, cantidad_dx)
+
+  # C. Unir y Filtrar (Top 15 Procedimientos más frecuentes)
+  data_grafico_proc <- data_totales_cpms %>%
+    left_join(data_top_dx, by = "cpms_codigo") %>%
+    slice_max(total_general, n = 15) # <-- Ajusta este número si deseas ver más
+  
+  # 2. CREACIÓN DEL GRÁFICO DE BARRAS
+  # ---------------------------------------------------------
+  p_barras_proc <- ggplot(data_grafico_proc, 
+       aes(x = reorder(cpms_codigo, total_general), y = total_general)) +
+    
+    # La Barra Principal (Usamos un color Verde Agua/Turquesa para diferenciar)
+    geom_col(fill = "#1ABC9C", alpha = 0.85, width = 0.7,
+             aes(text = paste("Procedimiento:", cpms_codigo, 
+                              "<br>Total Realizado:", total_general,
+                              "<br>Dx Principal:", top_diag, 
+                              "<br>Casos del Dx:", cantidad_dx))) +
+    
+    # El Texto dentro de la barra (El código CIE-10 del Diagnóstico)
+    geom_text(aes(label = paste("Dx:", top_diag), 
+                  y = total_general / 2), # Centrado en la barra
+              color = "white", fontface = "bold", size = 3.5) +
+    
+    coord_flip() + # Barras horizontales
+    theme_minimal() +
+    labs(
+      title = "Procedimientos (CPMS) y Diagnóstico Asociado",
+      subtitle = "El texto dentro de la barra indica el CIE-10 más frecuente para ese procedimiento",
+      x = "Código CPMS",
+      y = "Cantidad Total de Procedimientos"
+    ) +
+    theme(
+      panel.grid.major.y = element_blank() # Limpiamos líneas de fondo innecesarias
+    )
+
+  # 3. INTERACTIVIDAD
+  ggplotly(p_barras_proc, tooltip = "text")
+}
+```
+
+## Tabla
+
+```{r tabla-cpms-diagnosticos, echo=FALSE}
+make_download_table(data_grafico_proc, "cpms_frecuente")
+```
+:::
+
+## 6. Diagnosticos más frecuentes por CPMS
+
+::: panel-tabset
+## Gráfico
+
+```{r grafico-barras-ccpms-diagnosticos, echo=FALSE}
+#| fig-width: 10
+#| fig-height: 10
+
+if(exists("df_diag")){
+  
+  # 1. PREPARACIÓN DE DATOS (SIN FILTRO DE PROCEDIMIENTOS)
+  # ---------------------------------------------------------
+  data_treemap <- df_diag %>%
+    # Paso A: Agrupar directamente todo el dataframe
+    group_by(cpms_codigo, DIAGNOSTICO) %>%
+    summarise(valor = sum(cantidad), .groups = "drop") %>%
+    
+    # Paso B: Limpieza Interna (Vital)
+    # Aunque mostramos TODOS los procedimientos, seguimos quedándonos 
+    # solo con los 5 diagnósticos principales de cada uno para no saturar la memoria.
+    group_by(cpms_codigo) %>%
+    slice_max(valor, n = 5) %>% 
+    ungroup()
+  
+  # 2. CONSTRUCCIÓN DE LA ESTRUCTURA (Igual que antes)
+  # ---------------------------------------------------------
+  
+  # Nivel 1: Padres (Todos los procedimientos existentes)
+  nivel_procedimientos <- data_treemap %>%
+    group_by(cpms_codigo) %>%
+    summarise(valor = sum(valor)) %>%
+    mutate(
+      labels = as.character(cpms_codigo),
+      parents = "Total General",
+      ids = as.character(cpms_codigo)
+    )
+  
+  # Nivel 2: Hijos (Diagnósticos)
+  nivel_diagnosticos <- data_treemap %>%
+    mutate(
+      labels = paste0(DIAGNOSTICO, " "), 
+      parents = as.character(cpms_codigo),
+      ids = paste(cpms_codigo, DIAGNOSTICO, sep = "-")
+    ) %>%
+    select(labels, parents, valor, ids)
+  
+  df_plot_final <- bind_rows(nivel_procedimientos, nivel_diagnosticos)
+  
+  # 3. GRAFICAR
+  # ---------------------------------------------------------
+  plot_ly(
+    data = df_plot_final,
+    type = "treemap",
+    ids = ~ids,
+    labels = ~labels,
+    parents = ~parents,
+    values = ~valor,
+    branchvalues = "total",
+    textinfo = "label+value+percent parent",
+    hovertemplate = "<b>%{label}</b><br>Atenciones: %{value}<br>Participación: %{percentParent:.1%}<extra></extra>",
+    marker = list(colorscale = "Viridis")
+  ) %>%
+    layout(
+      title = list(text = "<b>Mapa Completo: Diagnósticos por Procedimiento</b>"),
+      margin = list(t = 50, l = 0, r = 0, b = 0)
+    )
+}
+```
+
+## Tabla
+
+```{r tabla-ccpms-diagnosticos, echo=FALSE}
+make_download_table(df_plot_final, "cpms_diagnosticos")
+```
+:::
+
+## 7. Distribución Geográfica (Mapa Coroplético)
+
+::: panel-tabset
+## Gráfico
+
+```{r mapa-coropletico, echo=FALSE}
+#| fig-width: 10
+#| fig-height: 8
+
+library(geodata)
+
+if(exists("df_region")){
+  
+  # 1. Obtener mapa base
+  # Usamos tryCatch por si falla la descarga de geodata
+  peru_sf_raw <- tryCatch(
+    { geodata::gadm(country = "PER", level = 1, path = tempdir()) %>% st_as_sf() },
+    error = function(e) { return(NULL) }
+  )
+  
+  if(!is.null(peru_sf_raw)) {
+    
+    # 2. Limpieza y FUSIÓN DE GEOMETRÍAS (Aquí estaba el error)
+    peru_sf <- peru_sf_raw %>%
+      select(NAME_1, geometry) %>%
+      mutate(
+        name_clean = str_to_upper(stri_trans_general(NAME_1, "Latin-ASCII")),
+        name_clean = case_when(
+          name_clean == "LIMA PROVINCE" ~ "LIMA",
+          name_clean == "LIMA" ~ "LIMA",
+          name_clean == "CALLAO" ~ "CALLAO",
+          TRUE ~ name_clean
+        )
+      ) %>%
+      # Agrupamos LIMA (Provincia + Región)
+      group_by(name_clean) %>%
+      summarise(geometry = st_union(geometry), .groups = "drop") %>%
+      
+      # --- LA SOLUCIÓN AL ERROR ---
+      # Forzamos a que la geometría sea MULTIPOLYGON válida
+      st_cast("MULTIPOLYGON") 
+      # ----------------------------
+
+    # 3. Preparar datos (Ejemplo con 2022)
+    data_mapa <- df_region %>%
+      filter(anio == 2022) %>% 
+      group_by(REGION) %>%
+      summarise(total_atenciones = sum(cantidad), .groups = "drop")
+
+    # 4. Unir
+    mapa_final <- peru_sf %>%
+      left_join(data_mapa, by = c("name_clean" = "REGION"))
+
+    # 5. Graficar
+    p_mapa <- ggplot(mapa_final) +
+      geom_sf(aes(fill = total_atenciones, 
+                  text = paste("Región:", name_clean, "<br>Total:", total_atenciones)), 
+              color = "white", lwd = 0.2) +
+      scale_fill_viridis(option = "plasma", na.value = "grey90", name = "Atenciones") +
+      theme_void() + 
+      labs(title = "Producción de Servicios por Región (2022)")
+    
+    ggplotly(p_mapa, tooltip = "text")
+    
+  } else {
+    print("No se pudo descargar el mapa base de GADM. Verifique su conexión.")
+  }
+}
+```
+
+## Tabla
+
+```{r tabla-region, echo=FALSE}
+make_download_table(mapa_final, "atenciones_por_region")
+```
+:::
+
+## 8. Tabla Detallada de Procedimientos (CPMS)
+
+::: panel-tabset
+## Gráfico
+
+```{r tabla-cpms, echo=FALSE}
+if(exists("df_diag")){
+  datatable(df_diag, filter = "top", options = list(pageLength = 5))
+}
+```
+:::

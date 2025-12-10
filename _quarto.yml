@@ -5,6 +5,7 @@ project:
     - index.qmd
     - individuales.qmd
     - grupales.qmd
+    - ss policia.qmd
 
 website:
   title: "Observatorio de Medicina Complementaria (2019-2024)"
@@ -13,9 +14,11 @@ website:
       - href: index.qmd
         text: "Inicio"
       - href: individuales.qmd
-        text: "Atenciones Individuales"
+        text: "Atenciones Individuales (MINSA)"
       - href: grupales.qmd
-        text: "Actividades Grupales"
+        text: "Actividades Grupales (MINSA)"
+      - href: ss policia.qmd
+        text: "Actividades Individuales (SALUDPOL)"
 
 format:
   html:
