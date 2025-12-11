@@ -579,9 +579,111 @@ make_download_table(df_treemap_final, "perfil_clinico_por_terapia")
 ```
 :::
 
+## 5. Región de residencia de los usuarios atendidos
 
+::: {.panel-tabset}
 
+## Gráfico
 
+```{r}
+#| label: mapa-coropletico-geodata
+#| warning: false
+#| message: false
+
+library(leaflet)
+library(sf)
+library(geodata)
+library(dplyr)
+
+# 1. OBTENER GEOMETRÍA DEL PERÚ (Nivel 1 = Departamentos)
+# 'path = tempdir()' descarga el mapa en una carpeta temporal para no llenar tu proyecto
+mapa_peru_gadm <- gadm(country = "PER", level = 1, path = tempdir()) %>% 
+  st_as_sf() # Convertimos a formato 'sf' para que leaflet lo entienda fácil
+
+# 2. PREPARAR TUS DATOS (Agrupando Lima)
+data_para_mapa <- df_ind %>%
+  filter(codigo %in% codigos_interes) %>%
+  mutate(
+    # Normalización para cruzar con el mapa de GADM
+    REGION_MAPA = case_when(
+      REGION %in% c("LIMA METROPOLITANA", "LIMA REGIÓN") ~ "LIMA",
+      REGION == "SIN INFORMACIÓN" ~ NA_character_,
+      TRUE ~ REGION
+    )
+  ) %>%
+  filter(!is.na(REGION_MAPA)) %>%
+  group_by(REGION_MAPA) %>%
+  summarise(Pacientes = n_distinct(ID_paciente))
+
+# 3. UNIR DATOS CON EL MAPA
+# GADM trae los nombres en la columna 'NAME_1'
+peru_mapa_final <- mapa_peru_gadm %>%
+  mutate(name_upper = toupper(NAME_1)) %>% # Convertimos a mayúsculas para el cruce
+  left_join(data_para_mapa, by = c("name_upper" = "REGION_MAPA"))
+
+# 4. CREAR PALETA DE COLORES
+paleta <- colorBin(
+  palette = "YlOrRd", 
+  domain = peru_mapa_final$Pacientes,
+  bins = 5,
+  na.color = "#bdc3c7"
+)
+
+# 5. GENERAR MAPA LEAFLET
+leaflet(peru_mapa_final) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  setView(lng = -75, lat = -9, zoom = 5) %>%
+  
+  # Polígonos
+  addPolygons(
+    fillColor = ~paleta(Pacientes),
+    weight = 1,
+    opacity = 1,
+    color = "white",
+    dashArray = "3",
+    fillOpacity = 0.7,
+    
+    # Efecto al pasar el mouse
+    highlightOptions = highlightOptions(
+      weight = 3,
+      color = "#666",
+      dashArray = "",
+      fillOpacity = 0.7,
+      bringToFront = TRUE),
+    
+    # Etiquetas
+    label = ~paste0(NAME_1, ": ", format(Pacientes, big.mark=",", na.encode=FALSE)),
+    popup = ~paste0(
+      "<h4>", NAME_1, "</h4>",
+      "<b>Pacientes Atendidos:</b> ", format(Pacientes, big.mark=",", na.encode=FALSE)
+    )
+  ) %>%
+  
+  # Leyenda
+  addLegend(
+    pal = paleta, 
+    values = ~Pacientes, 
+    opacity = 0.7, 
+    title = "Pacientes",
+    position = "bottomright"
+  )
+```
+
+## Tabla
+
+```{r}
+#| label: tabla-mapa-coropletico
+#| warning: false
+
+# Tabla simple para descarga
+data_export_coropletico <- data_para_mapa %>%
+  arrange(desc(Pacientes)) %>%
+  rename(Departamento = REGION_MAPA, Pacientes_Unicos = Pacientes)
+
+make_download_table(data_export_coropletico, "Distribucion_Regional_Pacientes")
+```
+
+:::
 
 [^1]: Etapas de vida:
 

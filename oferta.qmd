@@ -1,0 +1,653 @@
+---
+title: "Oferta de servicios de Medicina Complementaria (2019-2024)"
+subtitle: "Análisis de datos del Ministerio de Salud (MINSA), Seguro Social de Salud (EsSalud), SaludPOL y Superintendencia de Salud (SUSALUD)"
+date: last-modified
+author: "Subdirección de Medicina Complementaria (SUMEC-CENSI)"
+format: 
+  html:
+    theme: cosmo
+    toc: true
+    page-layout: full
+    code-fold: true
+footer: "Fuente de datos: Sistema HISS-MINSA, SALUDPOL y EsSalud | Fecha de corte: 05/2025 (HISS MINSA), 11/2025 (SALUDPOL), 12/25 (SUSALUD)"
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(plotly)
+library(DT)
+df_minsa <- readRDS("data/df_individuales_geo.rds")
+
+# --- FUNCIÓN AUXILIAR PARA TABLAS DE DESCARGA ---
+# Esta función crea estandariza el botón de Excel para todos los gráficos
+make_download_table <- function(data_input, filename_label = "datos") {
+  datatable(
+    data_input,
+    extensions = 'Buttons',
+    rownames = FALSE,
+    options = list(
+      dom = 'Bfrtip',
+      buttons = list(
+        list(extend = 'excel', filename = filename_label, title = filename_label),
+        list(extend = 'csv', filename = filename_label)
+      ),
+      pageLength = 5, # Pocas filas para no ocupar mucho espacio
+      scrollX = TRUE,
+      language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json')
+    )
+  )
+}
+
+# Union de bases
+
+# --- 1. CARGA Y LIMPIEZA DE RENIPRESS ---
+library(readxl)
+library(dplyr)
+
+# A. Cargar RENIPRESS
+# Seleccionamos solo las columnas que pediste para no hacer pesada la base
+df_renipress <- read_excel("renipress.xls") %>%
+  select(
+    Institucion = `Institución`,
+    Codigo_Unico_Texto = `Código Único`, # Mantenemos el original por si acaso
+    Tipo = `Tipo`,
+    Nombre_Establecimiento = `Nombre del establecimiento`,
+    Departamento = `Departamento`,
+    Categoria = `Categoria`,
+    NORTE, 
+    ESTE
+  ) %>%
+  mutate(
+    # TRUCO CLAVE: Convertir a numérico elimina los ceros a la izquierda
+    # "00000350" se convierte en el número 350
+    renaes_match = as.numeric(Codigo_Unico_Texto)
+  )
+
+codigos_interes <- c(
+  "97810", "97811", "97813", "97814", "U903", "90861", "90880", "90849", "90857", 
+  "U900", "U902", "U904", "U907", "U908", "U906", "U905", "97022", 
+  "98925", "98926", "98927", "98928", "98929", "98940", "98941", "98942", "98943", 
+  "97124", "Z5102", "U901", "U080"
+)
+
+# B. UNIÓN CON TU BASE DE ATENCIONES
+# Asumiendo que tu base principal se llama 'df_minsa' y tiene la columna 'renaes'
+df_geo_completo <- df_minsa %>%
+  # 1. Filtramos primero por tus códigos de interés (Cartera de Servicios)
+  filter(codigo %in% codigos_interes) %>%
+  # 2. Unimos con Renipress usando la llave numérica
+  left_join(df_renipress, by = c("renaes" = "renaes_match")) %>%
+  # 3. Limpieza: Si hay establecimientos que no cruzaron, poner "Desconocido"
+  mutate(
+    Tipo = replace_na(Tipo, "NO DEFINIDO"),
+    Categoria = replace_na(Categoria, "SIN CATEGORIA"),
+    Nombre_Establecimiento = replace_na(Nombre_Establecimiento, "DESCONOCIDO"),
+    Departamento = replace_na(Departamento, "SIN INFORMACIÓN")
+  )
+### Oferta EsSalud
+
+# --- CARGA DE DATOS ESSALUD ---
+library(readxl)
+library(sf)
+library(geodata)
+library(tidyverse)
+library(leaflet)
+library(DT)
+library(stringi)
+
+# 1. Cargar la base
+df_essalud <- read_excel("oferta_essalud.xlsx") %>%
+  mutate(
+    Tipo = str_trim(Tipo),
+    
+    # PASO 1: Convertir la columna Región original a Mayúsculas
+    Region_Upper = toupper(Región), 
+    
+    # PASO 2: Limpieza Específica y Regla de Lima
+    Region_Mapa = case_when(
+      # Regla explícita del usuario: Lima data = Lima Mapa
+      Region_Upper == "LIMA" ~ "LIMA", 
+      
+      # Corrección de Tildes y Nombres Específicos
+      Region_Upper == "ÁNCASH" ~ "ANCASH",
+      Region_Upper == "ANCASH" ~ "ANCASH", # Por si acaso venga sin tilde
+      Region_Upper == "SAN MARTIN" ~ "SAN MARTIN",
+      Region_Upper == "JUNÍN" ~ "JUNIN",
+      Region_Upper == "HUÁNUCO" ~ "HUANUCO",
+      Region_Upper == "APURÍMAC" ~ "APURIMAC",
+      
+      # Caso Callao
+      Region_Upper == "CALLAO" ~ "CALLAO",
+      
+      # Para el resto, quitamos tildes de forma automática por seguridad
+      TRUE ~ chartr("ÁÉÍÓÚ", "AEIOU", Region_Upper)
+    )
+  )
+
+# 2. PREPARAR RESUMEN PARA EL MAPA
+resumen_essalud_mapa <- df_essalud %>%
+  group_by(Region_Mapa) %>%
+  summarise(
+    Total_EESS = n(),
+    Desglose_Tipos = paste0(
+      names(table(Tipo)), ": ", as.numeric(table(Tipo)), 
+      collapse = "<br>"
+    )  )
+
+
+```
+
+# Oferta: Ministerio de Salud
+
+```{r}
+#| label: calc-eess-ofertantes
+#| include: false
+
+# Calculamos cuántos establecimientos únicos (renaes) han reportado
+# al menos una atención con los códigos de interés.
+total_eess_ofertantes <- df_geo_completo %>%
+  summarise(total = n_distinct(renaes)) %>%
+  pull(total)
+
+total_eess_essalud<- df_essalud %>%
+  summarise(total = n()) %>%
+  pull(total)
+
+```
+
+::::::::: grid
+:::: g-col-4
+::: {style="background-color: #e7f1ff; border-left: 5px solid #0d6efd; padding: 15px; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"}
+[Establecimientos de Salud (MINSA)]{style="color: #6c757d; font-size: 0.9rem; text-transform: uppercase; font-weight: bold;"}
+
+<h3 style="font-size: 2.5rem; font-weight: 700; margin: 0; color: #0d6efd;">
+
+`r format(total_eess_ofertantes, big.mark=",")`
+
+</h3>
+
+<small style="color: #6c757d;">Producción HIS registrada</small>
+:::
+::::
+
+:::: g-col-4
+::: {style="background-color: #e6fffa; border-left: 5px solid #198754; padding: 15px; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"}
+[Centros y Unidades de Medicina Complementaria (EsSalud) ]{style="color: #6c757d; font-size: 0.9rem; text-transform: uppercase; font-weight: bold;"}
+
+<h3 style="font-size: 2.5rem; font-weight: 700; margin: 0; color: #198754;">
+
+`r format(total_eess_essalud, big.mark=",")`
+
+</h3>
+
+<small style="color: #6c757d;">Reportes Seguro Social de Salud</small>
+:::
+::::
+:::::::::
+
+### 1. Tipo de Establecimiento de Salud
+
+::: panel-tabset
+## Gráfico
+
+```{r}
+#| label: plot-tipo-eess
+#| warning: false
+
+# Agrupar
+resumen_tipo <- df_geo_completo %>%
+  filter(Tipo != "NO DEFINIDO") %>%
+  count(Tipo, name = "Atenciones") %>% # 'name' define el nombre de la columna conteo
+  arrange(desc(Atenciones))
+
+# Gráfico
+plot_ly(resumen_tipo, 
+        x = ~Atenciones, 
+        y = ~reorder(Tipo, Atenciones), 
+        type = 'bar', 
+        orientation = 'h',
+        marker = list(color = '#2980b9')) %>%
+  layout(title = "Atenciones según Tipo de Establecimiento",
+         xaxis = list(title = "Nro. Atenciones"), yaxis = list(title = ""))
+```
+
+## Tabla
+
+```{r}
+#| label: table-tipo-eess
+#| warning: false
+make_download_table(resumen_tipo, filename_label = "atenciones_por_tipo_eess")
+```
+:::
+
+### 2. Categoría del Establecimiento de Salud
+
+::: panel-tabset
+## Gráfico
+
+```{r}
+#| label: plot-categoria
+#| warning: false
+
+resumen_cat <- df_geo_completo %>%
+  filter(Categoria != "SIN CATEGORIA") %>%
+  count(Categoria, name = "Atenciones") %>%
+  arrange(desc(Atenciones))
+
+plot_ly(resumen_cat, 
+        x = ~Atenciones, 
+        y = ~reorder(Categoria, Atenciones), 
+        type = 'bar', 
+        orientation = 'h',
+        marker = list(color = '#16a085')) %>%
+  layout(title = "Atenciones según Categoría del EESS",
+         xaxis = list(title = "Nro. Atenciones"), yaxis = list(title = ""))
+```
+
+## Tabla
+
+```{r}
+#| label: table-categoria
+#| warning: false
+
+make_download_table(resumen_cat, filename_label = "atenciones_por_categoria_eess")
+```
+:::
+
+### 3. Establecimientos que más reportan
+
+::: panel-tabset
+## Gráfico
+
+```{r}
+#| label: plot-top20-renaes
+#| warning: false
+
+resumen_top20 <- df_geo_completo %>%
+  filter(Nombre_Establecimiento != "DESCONOCIDO") %>%
+  group_by(Nombre_Establecimiento, Departamento) %>% # Incluyo Dept para contexto
+  summarise(Atenciones = n(), .groups = 'drop') %>%
+  arrange(desc(Atenciones)) %>%
+  head(20)
+
+plot_ly(resumen_top20, 
+        x = ~Atenciones, 
+        y = ~reorder(Nombre_Establecimiento, Atenciones), 
+        type = 'bar', 
+        orientation = 'h',
+        text = ~paste(Departamento), # Muestra la región al pasar el mouse
+        marker = list(color = '#8e44ad')) %>%
+  layout(title = "Top 20 Establecimientos con Mayor Producción",
+         xaxis = list(title = "Nro. Atenciones"), 
+         yaxis = list(title = ""),
+         margin = list(l = 180)) # Margen izquierdo amplio para nombres largos
+```
+
+## Tabla
+
+```{r}
+#| label: table-top20-renaes
+#| warning: false
+
+make_download_table(resumen_top20, filename_label = "top20_establecimientos_atenciones")
+```
+:::
+
+### 4. Distribución Geográfica de Establecimientos Ofertantes
+
+::: panel-tabset
+## Gráfico
+
+```{r}
+#| label: mapa-oferta-renaes
+#| warning: false
+#| message: false
+
+library(leaflet)
+library(sf)
+library(geodata)
+library(dplyr)
+
+# 1. PREPARACIÓN DE DATOS (Dos partes)
+
+# A. Calcular el "Campeón" por Región (El que más produce)
+top_productor_region <- df_geo_completo %>%
+  # Filtramos basura
+  filter(Tipo != "NO DEFINIDO", Departamento != "SIN INFORMACIÓN") %>%
+  # Normalizamos nombres de departamento
+  mutate(
+    Departamento_Norm = case_when(
+      Departamento %in% c("LIMA", "LIMA METROPOLITANA", "LIMA REGIÓN") ~ "LIMA",
+      Departamento == "CALLAO" ~ "CALLAO",
+      TRUE ~ Departamento
+    )
+  ) %>%
+  # Contamos atenciones por EESS
+  group_by(Departamento_Norm, Nombre_Establecimiento) %>%
+  summarise(Atenciones_EESS = n(), .groups = 'drop_last') %>%
+  # Seleccionamos el #1 de cada región
+  slice_max(Atenciones_EESS, n = 1, with_ties = FALSE) %>%
+  rename(Top_EESS_Nombre = Nombre_Establecimiento, Top_EESS_Valor = Atenciones_EESS)
+
+# B. Calcular el Total de EESS por Región (La unidad de análisis principal)
+data_mapa_oferta <- df_geo_completo %>%
+  filter(Tipo != "NO DEFINIDO", Departamento != "SIN INFORMACIÓN") %>%
+  mutate(
+    Departamento_Norm = case_when(
+      Departamento %in% c("LIMA", "LIMA METROPOLITANA", "LIMA REGIÓN") ~ "LIMA",
+      Departamento == "CALLAO" ~ "CALLAO",
+      TRUE ~ Departamento
+    )
+  ) %>%
+  group_by(Departamento_Norm) %>%
+  summarise(
+    Total_RENAES = n_distinct(renaes) # <--- AQUÍ CAMBIAMOS LA UNIDAD DE ANÁLISIS
+  ) %>%
+  # C. Unimos con el dato del "Campeón"
+  left_join(top_productor_region, by = "Departamento_Norm")
+
+
+# 2. OBTENER GEOMETRÍA (GADM)
+mapa_peru_gadm <- gadm(country = "PER", level = 1, path = tempdir()) %>% st_as_sf()
+
+# 3. UNIR DATOS CON EL MAPA
+mapa_oferta_final <- mapa_peru_gadm %>%
+  mutate(NAME_UPPER = toupper(NAME_1)) %>%
+  left_join(data_mapa_oferta, by = c("NAME_UPPER" = "Departamento_Norm"))
+
+# 4. PALETA (Verde: Asociado a Infraestructura/Recursos)
+paleta_oferta <- colorBin(
+  palette = "Greens", 
+  domain = mapa_oferta_final$Total_RENAES,
+  bins = 5,
+  na.color = "#ecf0f1"
+)
+
+# 5. GENERAR MAPA LEAFLET
+leaflet(mapa_oferta_final) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  setView(lng = -75, lat = -9, zoom = 5) %>%
+  
+  addPolygons(
+    fillColor = ~paleta_oferta(Total_RENAES),
+    weight = 1, opacity = 1, color = "white", dashArray = "3", fillOpacity = 0.7,
+    
+    # Efecto Highlight
+    highlightOptions = highlightOptions(weight = 3, color = "#2c3e50", bringToFront = TRUE),
+    
+    # ETIQUETA SIMPLE (Al pasar rápido el mouse)
+    label = ~paste0(NAME_1, ": ", Total_RENAES, " Estab."),
+    
+    # POPUP DETALLADO (Al hacer clic o esperar)
+    popup = ~paste0(
+      "<div style='font-family: sans-serif;'>",
+      "<h4 style='margin-bottom:5px; color:#27ae60;'>", NAME_1, "</h4>",
+      "<b>Oferta Disponible:</b> ", Total_RENAES, " Establecimientos<br><hr>",
+      "<span style='font-size:0.9em; color:#7f8c8d;'>Mayor Productor:</span><br>",
+      "<b>", Top_EESS_Nombre, "</b><br>",
+      "(", format(Top_EESS_Valor, big.mark=","), " atenciones)",
+      "</div>"
+    )
+  ) %>%
+  
+  addLegend(
+    pal = paleta_oferta, 
+    values = ~Total_RENAES, 
+    opacity = 0.7, 
+    title = "Nro. EESS",
+    position = "bottomright"
+  )
+
+```
+
+## Tabla
+
+```{r}
+#| label: tabla-mapa-oferta
+#| warning: false
+
+# Tabla para descarga
+data_export_oferta <- data_mapa_oferta %>%
+  rename(Departamento = Departamento_Norm, 
+         Cantidad_EESS = Total_RENAES,
+         EESS_Mas_Productivo = Top_EESS_Nombre,
+         Produccion_Maxima = Top_EESS_Valor) %>%
+  arrange(desc(Cantidad_EESS))
+
+make_download_table(data_export_oferta, "Oferta_Regional_EESS")
+```
+:::
+
+# Oferta: Fondo de Aseguramiento Policial-SALUDPOL
+
+::: panel-tabset
+
+## Gráfico
+
+{{< include _mapa_oferta.qmd >}}
+
+:::
+
+# Oferta: Seguro Social de Salud
+
+Análisis de la infraestructura de Medicina Complementaria en el Seguro Social de Salud (EsSalud).
+
+### Clasificación por Tipo
+
+::: panel-tabset
+## Gráfico
+
+```{r}
+#| label: plot-essalud-tipo
+#| warning: false
+
+# 1. Conteo simple
+conteo_tipos <- df_essalud %>%
+  count(Tipo, name = "Cantidad") %>%
+  arrange(desc(Cantidad))
+
+# 2. Gráfico
+plot_ly(conteo_tipos, 
+        x = ~Cantidad, 
+        y = ~reorder(Tipo, Cantidad), 
+        type = 'bar', 
+        orientation = 'h',
+        text = ~Cantidad,
+        textposition = 'auto',
+        marker = list(color = '#0056b3')) %>% # Azul EsSalud Institucional
+  layout(
+    title = "Distribución de EESS EsSalud por Nivel de Complejidad",
+    xaxis = list(title = "Número de Establecimientos"),
+    yaxis = list(title = ""),
+    margin = list(l = 250) # Margen amplio para nombres largos (CAMec, UMEC...)
+  )
+```
+
+## Tabla
+
+```{r}
+#| label: table-essalud-tipo
+#| warning: false
+
+make_download_table(conteo_tipos, filename_label = "essalud_eess_por_tipo")
+```
+:::
+
+::: panel-tabset
+## Gráfico
+
+```{r}
+#| label: mapa-essalud
+#| warning: false
+#| message: false
+
+# 1. OBTENER GEOMETRÍA
+# Usamos tryCatch para descargar solo si no existe
+if(!exists("mapa_peru_gadm")) {
+  mapa_peru_gadm <- gadm(country = "PER", level = 1, path = tempdir()) %>% st_as_sf()
+}
+
+# 2. UNIR DATOS
+# Limpiamos también los nombres del MAPA para que el cruce sea perfecto
+mapa_essalud_final <- mapa_peru_gadm %>%
+  mutate(
+    # Convertir nombres del mapa a mayúsculas y quitar tildes
+    NAME_UPPER = toupper(NAME_1),
+    NAME_CLEAN = chartr("ÁÉÍÓÚ", "AEIOU", NAME_UPPER)
+  ) %>%
+  # Cruce usando la columna limpia
+  left_join(resumen_essalud_mapa, by = c("NAME_CLEAN" = "Region_Mapa")) %>%
+  mutate(
+    Total_EESS = replace_na(Total_EESS, 0),
+    Desglose_Tipos = replace_na(Desglose_Tipos, "Sin oferta reportada")
+  )
+
+# 3. PALETA
+paleta_essalud <- colorBin("Blues", domain = mapa_essalud_final$Total_EESS, bins = 5, na.color = "#ecf0f1")
+
+# 4. MAPA
+leaflet(mapa_essalud_final) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  setView(lng = -75, lat = -9, zoom = 5) %>%
+  addPolygons(
+    fillColor = ~paleta_essalud(Total_EESS),
+    weight = 1, opacity = 1, color = "white", dashArray = "3", fillOpacity = 0.7,
+    highlightOptions = highlightOptions(weight = 3, color = "#666", bringToFront = TRUE),
+    label = ~paste0(NAME_1, ": ", Total_EESS),
+    popup = ~paste0(
+      "<div style='font-family: sans-serif;'>",
+      "<h4 style='color:#0056b3; margin-bottom:5px;'>", NAME_1, "</h4>",
+      "<b>Total Establecimientos:</b> ", Total_EESS, "<hr>",
+      "<i>Distribución:</i><br>",
+      Desglose_Tipos,
+      "</div>"
+    )
+  ) %>%
+  addLegend(pal = paleta_essalud, values = ~Total_EESS, title = "Nro. EESS", position = "bottomright")
+```
+
+## Tabla
+
+```{r}
+#| label: tabla-mapa-essalud
+#| warning: false
+
+# Tabla para descarga
+data_export_essalud <- mapa_essalud_final %>%
+  st_set_geometry(NULL) %>%
+  select(Región = NAME_1, 
+         Cantidad_EESS = Total_EESS,
+         Desglose_Tipos) %>%
+  arrange(desc(Cantidad_EESS))  
+make_download_table(data_export_essalud, "Oferta_Regional_EESS_Essalud")
+```
+:::
+
+# Oferta: Establecimientos de Salud Privados (RENIPRESS)
+
+::: panel-tabset
+## Gráfico
+
+```{r}
+
+#| label: mapa-renaes-privados
+#| warning: false
+#| message: false
+
+# 1. CARGA DE DATOS
+# Leemos el archivo y seleccionamos las columnas que se ven en la imagen
+df_privados <- read_excel("renaes privados.xls") %>%
+  select(
+    Codigo_Unico = `Código Único`,
+    Nombre_EESS = `Nombre del establecimiento`,
+    Departamento,
+    Provincia,
+    Distrito,
+    Ubigeo = UBIGEO
+  ) %>%
+  mutate(
+    # PASO DE LIMPIEZA (Igual al anterior para asegurar cruce)
+    Dep_Upper = toupper(Departamento),
+    
+    Region_Mapa = case_when(
+      # Casos especiales de escritura
+      Dep_Upper == "LIMA" ~ "LIMA",
+      Dep_Upper == "CALLAO" ~ "CALLAO",
+      
+      # Limpieza general de tildes (ÁNCASH -> ANCASH, JUNÍN -> JUNIN)
+      TRUE ~ chartr("ÁÉÍÓÚ", "AEIOU", Dep_Upper)
+    )
+  )
+
+# 2. PREPARAR RESUMEN PARA EL MAPA
+# Contamos cuántos establecimientos privados hay por región
+resumen_privados_mapa <- df_privados %>%
+  group_by(Region_Mapa) %>%
+  summarise(
+    Total_Privados = n(),
+    .groups = 'drop'
+  )
+
+# 1. OBTENER GEOMETRÍA
+if(!exists("mapa_peru_gadm")) {
+  mapa_peru_gadm <- gadm(country = "PER", level = 1, path = tempdir()) %>% st_as_sf()
+}
+
+# 2. UNIR DATOS
+mapa_privados_final <- mapa_peru_gadm %>%
+  mutate(
+    NAME_CLEAN = chartr("ÁÉÍÓÚ", "AEIOU", toupper(NAME_1))
+  ) %>%
+  left_join(resumen_privados_mapa, by = c("NAME_CLEAN" = "Region_Mapa")) %>%
+  mutate(
+    Total_Privados = replace_na(Total_Privados, 0)
+  )
+
+# 3. PALETA (Usamos naranjas para diferenciar de MINSA/EsSalud)
+paleta_privados <- colorBin("Oranges", domain = mapa_privados_final$Total_Privados, bins = 5, na.color = "#ecf0f1")
+
+# 4. MAPA INTERACTIVO
+leaflet(mapa_privados_final) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  setView(lng = -75, lat = -9, zoom = 5) %>%
+  addPolygons(
+    fillColor = ~paleta_privados(Total_Privados),
+    weight = 1, opacity = 1, color = "white", dashArray = "3", fillOpacity = 0.7,
+    highlightOptions = highlightOptions(weight = 3, color = "#666", bringToFront = TRUE),
+    
+    label = ~paste0(NAME_1, ": ", Total_Privados),
+    
+    popup = ~paste0(
+      "<div style='font-family: sans-serif; text-align: center;'>",
+      "<h4 style='color:#d35400; margin-bottom:5px;'>", NAME_1, "</h4>",
+      "<b>Oferta Privada:</b><br>", 
+      "<span style='font-size: 1.5em; font-weight: bold;'>", format(Total_Privados, big.mark=","), "</span>",
+      "<br>Establecimientos",
+      "</div>"
+    )
+  ) %>%
+  addLegend(pal = paleta_privados, values = ~Total_Privados, title = "Nro. EESS Privados", position = "bottomright")
+
+```
+
+## Tabla
+
+```{r}
+#| label: tabla-final-privados
+#| warning: false
+
+# Mostramos la tabla limpia
+datatable(df_privados %>% select(-Region_Mapa, -Dep_Upper), # Ocultamos columnas de cálculo
+          extensions = 'Buttons',
+          options = list(
+            dom = 'Bfrtip',
+            buttons = c('copy', 'excel', 'csv'),
+            pageLength = 10,
+            autoWidth = TRUE,
+            language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json')
+          ),
+          rownames = FALSE,
+          class = 'cell-border stripe'
+)
+```
+:::

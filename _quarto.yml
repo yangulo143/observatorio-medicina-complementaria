@@ -6,6 +6,7 @@ project:
     - individuales.qmd
     - grupales.qmd
     - ss policia.qmd
+    - oferta.qmd
 
 website:
   title: "Observatorio de Medicina Complementaria (2019-2024)"
@@ -19,6 +20,8 @@ website:
         text: "Actividades Grupales (MINSA)"
       - href: ss policia.qmd
         text: "Actividades Individuales (SALUDPOL)"
+      - href: oferta.qmd
+        text: "Oferta de servicios"
 
 format:
   html:

@@ -478,70 +478,7 @@ make_download_table(df_plot_final, "cpms_diagnosticos")
 ::: panel-tabset
 ## Gráfico
 
-```{r mapa-coropletico, echo=FALSE}
-#| fig-width: 10
-#| fig-height: 8
-
-library(geodata)
-
-if(exists("df_region")){
-  
-  # 1. Obtener mapa base
-  # Usamos tryCatch por si falla la descarga de geodata
-  peru_sf_raw <- tryCatch(
-    { geodata::gadm(country = "PER", level = 1, path = tempdir()) %>% st_as_sf() },
-    error = function(e) { return(NULL) }
-  )
-  
-  if(!is.null(peru_sf_raw)) {
-    
-    # 2. Limpieza y FUSIÓN DE GEOMETRÍAS (Aquí estaba el error)
-    peru_sf <- peru_sf_raw %>%
-      select(NAME_1, geometry) %>%
-      mutate(
-        name_clean = str_to_upper(stri_trans_general(NAME_1, "Latin-ASCII")),
-        name_clean = case_when(
-          name_clean == "LIMA PROVINCE" ~ "LIMA",
-          name_clean == "LIMA" ~ "LIMA",
-          name_clean == "CALLAO" ~ "CALLAO",
-          TRUE ~ name_clean
-        )
-      ) %>%
-      # Agrupamos LIMA (Provincia + Región)
-      group_by(name_clean) %>%
-      summarise(geometry = st_union(geometry), .groups = "drop") %>%
-      
-      # --- LA SOLUCIÓN AL ERROR ---
-      # Forzamos a que la geometría sea MULTIPOLYGON válida
-      st_cast("MULTIPOLYGON") 
-      # ----------------------------
-
-    # 3. Preparar datos (Ejemplo con 2022)
-    data_mapa <- df_region %>%
-      filter(anio == 2022) %>% 
-      group_by(REGION) %>%
-      summarise(total_atenciones = sum(cantidad), .groups = "drop")
-
-    # 4. Unir
-    mapa_final <- peru_sf %>%
-      left_join(data_mapa, by = c("name_clean" = "REGION"))
-
-    # 5. Graficar
-    p_mapa <- ggplot(mapa_final) +
-      geom_sf(aes(fill = total_atenciones, 
-                  text = paste("Región:", name_clean, "<br>Total:", total_atenciones)), 
-              color = "white", lwd = 0.2) +
-      scale_fill_viridis(option = "plasma", na.value = "grey90", name = "Atenciones") +
-      theme_void() + 
-      labs(title = "Producción de Servicios por Región (2022)")
-    
-    ggplotly(p_mapa, tooltip = "text")
-    
-  } else {
-    print("No se pudo descargar el mapa base de GADM. Verifique su conexión.")
-  }
-}
-```
+{{< include _mapa_oferta.qmd >}}
 
 ## Tabla
 
