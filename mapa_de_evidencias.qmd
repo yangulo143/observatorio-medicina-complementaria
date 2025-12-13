@@ -1,0 +1,306 @@
+---
+title: "Mapas de evidencias en Medicina Complementaria"
+subtitle: "Análisis bibliometrico y de producción institucional"
+date: last-modified
+author: "Subdirección de Medicina Complementaria (SUMEC-CENSI)"
+format: 
+  html:
+    theme: cosmo
+    toc: true
+    page-layout: full
+    code-fold: true
+footer: "Scopus y BVS MTCI | Fecha de corte: 11/12/2025 (Scopus)"
+---
+
+```{r setup, include=FALSE}
+# --- 1. LIBRERÍAS ---
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+library(tidyverse)
+library(readxl)       # NECESARIO PARA LEER EXCEL
+library(janitor)      # Limpieza de nombres
+library(plotly)       # Gráficos
+library(DT)           # Tablas
+library(stringr)      # Manejo de texto
+library(countrycode)
+
+# --- FUNCIÓN PARA TABLAS DE DESCARGA ---
+make_download_table <- function(data_input, filename_label = "datos") {
+  datatable(
+    data_input,
+    extensions = 'Buttons',
+    rownames = FALSE,
+    options = list(
+      dom = 'Bfrtip',
+      buttons = list(
+        list(extend = 'excel', filename = filename_label, title = filename_label, text = 'Descargar Excel'),
+        list(extend = 'csv', filename = filename_label, text = 'Descargar CSV')
+      ),
+      pageLength = 5,
+      scrollX = TRUE,
+      language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json')
+    )
+  )
+}
+
+# --- 2. CARGA DE DATOS ---
+# Leemos el Excel. Asegúrate que el archivo esté en la misma carpeta.
+tryCatch({
+  raw_data <- read_excel("base rayyan.xlsx")
+}, error = function(e) {
+  stop("Error: No se encuentra 'base rayyan.xlsx'. Verifica el nombre y la carpeta.")
+})
+
+# Limpiamos nombres de columnas automáticamente
+# Se asume que las columnas en Excel son: Year, Journal, Language, Terapia, Desenlace, Tipo de estudio
+data_clean <- raw_data %>% clean_names()
+
+# --- 3. PROCESAMIENTO DE VARIABLES MÚLTIPLES ---
+# Aquí ocurre la magia para separar "Terapia A; Terapia B" en dos filas distintas
+
+# Función auxiliar para limpiar y contar variables separadas por ;
+process_multi_column <- function(df, col_name) {
+  df %>%
+    select({{col_name}}) %>%
+    drop_na() %>%
+    # Separamos las filas por el punto y coma
+    separate_rows({{col_name}}, sep = ";") %>%
+    # Quitamos espacios en blanco extra y estandarizamos a Título
+    mutate(item = str_trim({{col_name}})) %>%
+    # Filtramos vacíos que puedan quedar
+    filter(item != "") %>%
+    count(item, sort = TRUE) %>%
+    rename(Categoria = item, Frecuencia = n)
+}
+
+# Generamos los sub-datasets
+# Nota: clean_names convierte "Tipo de estudio" en "tipo_de_estudio"
+
+# 1. Terapia
+terapia_data <- process_multi_column(data_clean, x55014_terapia_complementaria)
+
+# 2. Desenlace
+desenlace_data <- process_multi_column(data_clean, x55015_desenlace)
+
+# 3. Tipo de Estudio
+tipo_estudio_data <- process_multi_column(data_clean, x55013_tipo)
+
+# 4. Variables Simples (Año, Revista, Idioma)
+year_data <- data_clean %>% 
+  count(year) %>% 
+  arrange(year)
+
+journal_data <- data_clean %>% 
+  count(journal) %>% 
+  slice_max(n, n = 15)
+
+
+# --- NUEVO: PROCESAMIENTO DE IDIOMA ---
+lang_data <- data_clean %>% 
+  # Estandarizamos: English, english, ENGLISH -> English
+  mutate(clean_lang = str_to_title(str_trim(language))) %>%
+  count(clean_lang) %>%
+  mutate(percentage = n / sum(n))
+
+# --- NUEVO: PROCESAMIENTO DEL MAPA (LOCATION) ---
+# Asumimos que la columna 'location' tiene nombres de países
+map_data <- data_clean %>%
+  select(location) %>%
+  drop_na() %>%
+  separate_rows(location, sep = ";") %>% # Por si hay colaboración (Peru; Spain)
+  mutate(clean_loc = str_trim(location)) %>%
+  # Convertimos nombre a código ISO3 (ej. Peru -> PER)
+  mutate(iso_code = countrycode(clean_loc, origin = "country.name", destination = "iso3c")) %>%
+  filter(!is.na(iso_code)) %>% # Filtramos lo que no sea país reconocido
+  count(iso_code, name = "documents") %>%
+  mutate(country_name = countrycode(iso_code, origin = "iso3c", destination = "country.name"))
+
+```
+
+# Resumen Ejecutivo
+
+::: callout-note
+Este reporte analiza **`r nrow(raw_data)`** estudios incluidos en la revisión. Se han procesado variables de respuesta múltiple (Terapia, Desenlace y Diseño) para identificar la frecuencia real de cada categoría.
+:::
+
+# Características Bibliométricas
+
+::::: {layout-ncol="1"}
+::: panel-tabset
+## Producción por Año
+
+```{r}
+p_year <- ggplot(year_data, aes(x = year, y = n)) +
+  geom_area(fill = "#3498db", alpha = 0.5) +
+  geom_line(color = "#2980b9", size = 1) +
+  geom_point(color = "#2c3e50") +
+  theme_minimal() +
+  labs(x = "Año", y = "Estudios")
+
+ggplotly(p_year)
+```
+
+## Datos
+
+```{r}
+make_download_table(year_data, "distribucion_anio")
+```
+:::
+
+::: panel-tabset
+## Idioma de Publicación
+
+```{r}
+p_lang <- plot_ly(lang_data, labels = ~clean_lang, values = ~n, type = 'pie',
+                  marker = list(colors = c('#2ecc71', '#f1c40f', '#e74c3c'))) %>%
+  layout(showlegend = TRUE)
+
+p_lang
+```
+
+## Datos
+
+```{r}
+make_download_table(lang_data, "idiomas")
+
+```
+:::
+:::::
+
+# Distribución Geográfica
+
+::: panel-tabset
+## Mapa Mundial
+
+```{r}
+#| label: fig-map 
+#| fig-height: 8
+
+g_geo <- list( showframe = FALSE, showcoastlines = TRUE, projection = list(type = 'mercator') # Puedes usar 'natural earth' para esférico 
+)
+
+plot_ly(map_data, type = 'choropleth', locations = ~iso_code, z = ~documents, text = ~country_name, colorscale = 'Viridis', marker = list(line = list(color = toRGB("white"), width = 0.5)), colorbar = list(title = 'N° Docs')) %>% layout(geo = g_geo, margin = list(l=0, r=0, t=0, b=0))
+```
+
+Datos Fuente
+
+```{r}
+make_download_table(map_data, "produccion_por_pais")
+```
+:::
+
+## Principales Revistas
+
+::: panel-tabset
+## Gráfico
+
+```{r}
+#| fig-height: 6
+p_jour <- ggplot(journal_data, aes(x = reorder(journal, n), y = n)) +
+  geom_col(fill = "#2c3e50") +
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "", y = "Cantidad de Artículos")
+
+ggplotly(p_jour)
+
+
+```
+
+## Datos
+
+```{r}
+make_download_table(journal_data, "top_revistas")
+```
+:::
+
+# Análisis de Contenido (Multirespuesta)
+
+En esta sección, los porcentajes pueden sumar más del 100% ya que un mismo estudio puede abordar múltiples terapias o evaluar varios desenlaces.
+
+## Terapias Intervenidas
+
+::: panel-tabset
+## Gráfico
+
+```{r}
+p_terapia <- ggplot(terapia_data, aes(x = reorder(Categoria, Frecuencia), y = Frecuencia)) +
+  geom_col(fill = "#8e44ad") +
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "", y = "Frecuencia")
+
+ggplotly(p_terapia)
+
+```
+
+## Datos
+
+```{r}
+make_download_table(terapia_data, "frecuencia_terapias")
+
+```
+:::
+
+## Tipos de Estudio y Desenlaces
+
+::::: {layout-ncol="1"}
+::: panel-tabset
+## Diseño del Estudio
+
+```{r}
+p_design <- ggplot(tipo_estudio_data, aes(x = reorder(Categoria, Frecuencia), y = Frecuencia)) +
+  geom_col(fill = "#16a085") +
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "", y = "N° Estudios")
+
+ggplotly(p_design)
+
+```
+
+## Datos
+
+```{r}
+make_download_table(tipo_estudio_data, "tipos_estudio")
+```
+:::
+
+::: panel-tabset
+## Desenlaces Evaluados
+
+```{r}
+# No necesitamos filtrar, el treemap maneja bien muchos datos
+plot_ly(
+  desenlace_data,
+  labels = ~Categoria,
+  parents = NA, # Necesario para la estructura plana
+  values = ~Frecuencia,
+  type = 'treemap',
+  textinfo = "label+value+percent parent" # Muestra Nombre, N y %
+) %>%
+  layout(title = "Distribución de Desenlaces")
+```
+
+## Datos
+
+```{r}
+make_download_table(desenlace_data, "desenlaces")
+```
+:::
+:::::
+
+# Base de Datos Completa
+
+```{r}
+datatable(data_clean, 
+          filter = 'top',
+          extensions = 'Buttons',
+          options = list(dom = 'Bfrtip', buttons = c('csv', 'excel'), scrollX = TRUE))
+
+```
+
+# Otras fuentes de información
+
+1.  [Biblioteca Virtual en Salud - Medicina Tradicional, Complementaria e Integrativa](https://mtci.bvsalud.org/mapas-de-evidencia/)
+2.  [Consorcio Académico Brasilero de Saúde Integrativa](https://cabsin.org.br/mapas-de-evidencias/)

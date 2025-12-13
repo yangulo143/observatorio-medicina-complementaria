@@ -7,6 +7,7 @@ project:
     - grupales.qmd
     - ss policia.qmd
     - oferta.qmd
+    - mapa_de_evidencias.qmd
 
 website:
   title: "Observatorio de Medicina Complementaria (2019-2024)"
@@ -22,6 +23,8 @@ website:
         text: "Actividades Individuales (SALUDPOL)"
       - href: oferta.qmd
         text: "Oferta de servicios"
+      - href: mapa_de_evidencias.qmd
+        text: "Mapas de evidencias"
 
 format:
   html:
